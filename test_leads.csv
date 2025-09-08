@@ -1,0 +1,4 @@
+app_no,name,mobile_no,amount,email
+APP001,John Doe,9876543210,500000,john.doe@example.com
+APP002,Jane Smith,9876543211,750000,jane.smith@example.com
+APP003,Bob Johnson,9876543212,300000,bob.johnson@example.com
