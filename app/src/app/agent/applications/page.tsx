@@ -12,7 +12,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Search, Filter, Eye, Edit, DollarSign } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
-import { DndContext, DragEndEvent, DragOverlay, DragStartEvent, useDroppable } from '@dnd-kit/core'
+import { DndContext, DragEndEvent, DragOverlay, DragStartEvent, useDroppable, PointerSensor, useSensor, useSensors, closestCenter } from '@dnd-kit/core'
 import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
@@ -46,10 +46,11 @@ const statusColumns = {
 }
 
 // Droppable Column Component
-function DroppableColumn({ id, title, count, children }: {
+function DroppableColumn({ id, title, count, totalAmount, children }: {
   id: string
   title: string
   count: number
+  totalAmount: number
   children: React.ReactNode
 }) {
   const { setNodeRef, isOver } = useDroppable({ id })
@@ -75,7 +76,12 @@ function DroppableColumn({ id, title, count, children }: {
   }
 
   return (
-    <Card className={`h-full border-t-4 ${getStageColor(id).split(' ').slice(-1)[0].replace('text-', 'border-t-')}`}>
+    <Card 
+      ref={setNodeRef}
+      className={`h-full border-t-4 transition-all duration-200 ${getStageColor(id).split(' ').slice(-1)[0].replace('text-', 'border-t-')} ${
+        isOver ? 'bg-blue-50 border-blue-300 shadow-lg scale-[1.02]' : ''
+      }`}
+    >
       <CardHeader className="pb-4 bg-gradient-to-r from-gray-50 to-gray-100 rounded-t-lg">
         <CardTitle className="flex items-center justify-between text-base font-semibold">
           <div className="flex items-center gap-2">
@@ -89,29 +95,46 @@ function DroppableColumn({ id, title, count, children }: {
             {count}
           </Badge>
         </CardTitle>
+        {/* Total Amount Display */}
+        <div className="text-sm text-gray-600 mt-2">
+          <div className="flex items-center justify-between">
+            <span>Total Amount:</span>
+            <span className="font-medium text-green-700">
+              ₹{totalAmount.toLocaleString()}
+            </span>
+          </div>
+        </div>
       </CardHeader>
-      <CardContent
-        ref={setNodeRef}
-        className={`p-4 space-y-3 min-h-96 transition-colors ${
-          isOver ? 'bg-blue-50 border-blue-200' : ''
-        }`}
-      >
-        {children}
-        {/* Empty state */}
-        {count === 0 && (
-          <div className="flex flex-col items-center justify-center py-12 text-gray-400">
-            <div className="text-4xl mb-2">{getStageIcon(id)}</div>
-            <div className="text-sm">No applications</div>
+      <div className="p-4 space-y-3 min-h-96">
+        <CardContent className="p-0">
+          {children}
+          {/* Empty state */}
+          {count === 0 && (
+            <div className="flex flex-col items-center justify-center py-12 text-gray-400">
+              <div className="text-4xl mb-2">{getStageIcon(id)}</div>
+              <div className="text-sm">No applications</div>
+              {isOver && (
+                <div className="text-blue-600 text-sm font-medium mt-4 animate-bounce">
+                  Drop application here
+                </div>
+              )}
+            </div>
+          )}
+        </CardContent>
+        {/* Visual feedback when dragging over */}
+        {isOver && count > 0 && (
+          <div className="text-center text-blue-600 text-sm font-medium py-3 border-2 border-dashed border-blue-300 rounded-lg bg-blue-50 animate-pulse">
+            Drop application here
           </div>
         )}
-      </CardContent>
+      </div>
     </Card>
   )
 }
 
 // Draggable Application Card Component
 function DraggableApplicationCard({ application, onClick }: {
-  application: any,
+  application: Application,
   onClick: () => void
 }) {
   const {
@@ -121,7 +144,7 @@ function DraggableApplicationCard({ application, onClick }: {
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: application.id })
+  } = useSortable({ id: `app-${application.id}` })
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -135,31 +158,44 @@ function DraggableApplicationCard({ application, onClick }: {
       style={style}
       {...attributes}
       {...listeners}
-      className="p-4 cursor-pointer hover:shadow-lg hover:scale-[1.02] transition-all duration-200 border border-gray-200 hover:border-blue-300 bg-white"
-      onClick={onClick}
+      className="p-2 hover:shadow-md hover:scale-[1.01] transition-all duration-200 border border-gray-200 hover:border-blue-300 bg-white relative cursor-grab active:cursor-grabbing"
     >
-      <div className="space-y-2">
+      {/* View Details Button */}
+      <div 
+        className="absolute top-1 right-1 p-0.5 hover:bg-blue-100 rounded z-10"
+        title="Click to view details"
+        onMouseDown={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.stopPropagation()
+          onClick()
+        }}
+      >
+        <Eye className="w-3 h-3 text-blue-600" />
+      </div>
+
+      {/* Card Content */}
+      <div className="space-y-1 pr-6">
         {/* Line 1: Customer Name */}
-        <div className="font-semibold text-gray-900 text-sm truncate">
+        <div className="font-medium text-gray-900 text-xs truncate">
           {application.lead?.name || 'Unknown Customer'}
         </div>
 
-        {/* Line 2: Mobile Number */}
-        <div className="text-sm text-gray-600 font-mono">
-          📱 {application.lead?.mobile_no || 'No mobile'}
-        </div>
-
-        {/* Line 3: Agent Name (Self) */}
-        <div className="text-sm text-blue-600 truncate">
-          👤 {application.agent?.name || 'You'}
-        </div>
-
-        {/* Additional info in a subtle way */}
-        <div className="flex items-center justify-between pt-2 border-t border-gray-100">
-          <div className="text-xs font-medium text-green-600">
+        {/* Line 2: Mobile & Amount in one line */}
+        <div className="flex items-center justify-between text-xs">
+          <div className="text-gray-600 font-mono truncate">
+            📱 {application.lead?.mobile_no || 'No mobile'}
+          </div>
+          <div className="text-green-600 font-medium">
             ₹{application.loan_amount?.toLocaleString() || '0'}
           </div>
-          <div className="text-xs text-gray-400">
+        </div>
+
+        {/* Line 3: Agent & Date */}
+        <div className="flex items-center justify-between text-xs">
+          <div className="text-blue-600 truncate">
+            👤 {application.agent?.name || 'You'}
+          </div>
+          <div className="text-gray-400">
             {new Date(application.created_at).toLocaleDateString('en-IN', {
               day: '2-digit',
               month: 'short'
@@ -183,6 +219,14 @@ export default function AgentApplicationsPage() {
   const [isDisbursementDialogOpen, setIsDisbursementDialogOpen] = useState(false)
   const [pendingDisbursement, setPendingDisbursement] = useState<{applicationId: string, application: Application} | null>(null)
   const [disbursedAmount, setDisbursedAmount] = useState('')
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 3,
+      },
+    })
+  )
 
   useEffect(() => {
     if (profile?.id) {
@@ -234,6 +278,7 @@ export default function AgentApplicationsPage() {
         Object.entries(dbUpdates).filter(([_, value]) => value !== undefined)
       )
 
+      // Update the applications table
       const { error } = await supabase
         .from('applications')
         .update(cleanUpdates)
@@ -241,7 +286,26 @@ export default function AgentApplicationsPage() {
 
       if (error) throw error
 
-      toast.success('Application updated successfully')
+      // Update lead name if it was changed
+      if (updates.lead?.name !== undefined) {
+        const selectedApp = applications.find(app => String(app.id) === String(applicationId))
+        if (selectedApp && selectedApp.lead_id) {
+          const { error: leadError } = await supabase
+            .from('leads')
+            .update({ name: updates.lead.name })
+            .eq('id', selectedApp.lead_id)
+          
+          if (leadError) {
+            console.error('Error updating lead name:', leadError)
+            toast.error('Application updated but failed to update customer name')
+          } else {
+            toast.success('Application and customer name updated successfully')
+          }
+        }
+      } else {
+        toast.success('Application updated successfully')
+      }
+
       fetchApplications()
       setIsEditDialogOpen(false)
     } catch (error) {
@@ -251,7 +315,10 @@ export default function AgentApplicationsPage() {
   }
 
   const handleDragStart = (event: DragStartEvent) => {
-    setActiveId(event.active.id as string)
+    const activeId = String(event.active.id)
+    const applicationId = activeId.startsWith('app-') ? activeId.replace('app-', '') : activeId
+    console.log('Drag started:', event.active.id, 'applicationId:', applicationId)
+    setActiveId(applicationId)
   }
 
   const handleDragEnd = async (event: DragEndEvent) => {
@@ -260,11 +327,23 @@ export default function AgentApplicationsPage() {
 
     if (!over) return
 
-    const applicationId = active.id as string
-    const newStage = over.id as string
+    const activeId = String(active.id)
+    const overId = String(over.id)
+    
+    // Extract application ID (remove 'app-' prefix)
+    const applicationId = activeId.startsWith('app-') ? activeId.replace('app-', '') : activeId
+    
+    // Check if dropping on a droppable zone (stage) or another application
+    if (!overId.startsWith('stage-')) {
+      console.log('Not dropped on a stage, ignoring')
+      return
+    }
+    
+    // Extract stage name from the droppable zone ID (remove 'stage-' prefix)
+    const newStage = overId.replace('stage-', '')
 
-    // Find the application being moved
-    const application = applications.find(app => app.id === applicationId)
+    // Find the application being moved (handle both string and number IDs)
+    const application = applications.find(app => String(app.id) === String(applicationId))
     if (!application) return
 
     // Don't update if it's the same stage
@@ -279,6 +358,15 @@ export default function AgentApplicationsPage() {
     }
 
     // For other stages, update directly
+    // Optimistically update the UI
+    setApplications(prev =>
+      prev.map(app =>
+        String(app.id) === String(applicationId)
+          ? { ...app, stage: newStage }
+          : app
+      )
+    )
+
     try {
       const { error } = await supabase
         .from('applications')
@@ -288,10 +376,11 @@ export default function AgentApplicationsPage() {
       if (error) throw error
 
       toast.success('Application stage updated successfully')
-      fetchApplications()
     } catch (error) {
       console.error('Error updating application stage:', error)
       toast.error('Failed to update application stage')
+      // Revert the optimistic update
+      fetchApplications()
     }
   }
 
@@ -364,6 +453,19 @@ export default function AgentApplicationsPage() {
     return acc
   }, {} as Record<string, any[]>)
 
+  // Calculate total amounts for each stage
+  const stageTotals = Object.keys(statusColumns).reduce((acc, stage) => {
+    const apps = groupedApplications[stage] || []
+    if (stage === 'Disbursed') {
+      // For disbursed stage, sum up disbursed amounts
+      acc[stage] = apps.reduce((sum, app) => sum + (app.disbursed_amount || 0), 0)
+    } else {
+      // For other stages, sum up loan amounts
+      acc[stage] = apps.reduce((sum, app) => sum + (app.loan_amount || 0), 0)
+    }
+    return acc
+  }, {} as Record<string, number>)
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
@@ -412,17 +514,23 @@ export default function AgentApplicationsPage() {
 
       {/* Modern Kanban Board */}
       <div className="w-full overflow-x-auto">
-        <DndContext onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+        <DndContext 
+          sensors={sensors} 
+          collisionDetection={closestCenter}
+          onDragStart={handleDragStart} 
+          onDragEnd={handleDragEnd}
+        >
           <div className="flex gap-6 min-w-full pb-4" style={{ minWidth: 'max-content' }}>
             {Object.entries(statusColumns).map(([status, title]) => (
               <div key={status} className="flex-1 min-w-80">
                 <DroppableColumn
-                  id={status}
+                  id={`stage-${status}`}
                   title={title}
                   count={groupedApplications[status]?.length || 0}
+                  totalAmount={stageTotals[status] || 0}
                 >
                   <SortableContext
-                    items={groupedApplications[status]?.map(app => app.id) || []}
+                    items={groupedApplications[status]?.map(app => `app-${app.id}`) || []}
                     strategy={verticalListSortingStrategy}
                   >
                     {groupedApplications[status]?.map((application) => (
@@ -467,11 +575,20 @@ export default function AgentApplicationsPage() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <Label>Customer Name</Label>
-                  <Input value={selectedApplication.lead.name} disabled />
+                  <Input 
+                    value={selectedApplication.lead?.name || ''} 
+                    onChange={(e) => setSelectedApplication({
+                      ...selectedApplication,
+                      lead: {
+                        ...selectedApplication.lead,
+                        name: e.target.value
+                      }
+                    })}
+                  />
                 </div>
                 <div>
                   <Label>Mobile</Label>
-                  <Input value={selectedApplication.lead.mobile_no} disabled />
+                  <Input value={selectedApplication.lead?.mobile_no || ''} disabled />
                 </div>
               </div>
               

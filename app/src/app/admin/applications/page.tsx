@@ -18,11 +18,15 @@ import {
   DragOverlay,
   DragStartEvent,
   useDroppable,
-  useSortable,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  closestCenter,
 } from '@dnd-kit/core'
 import {
   SortableContext,
   verticalListSortingStrategy,
+  useSortable,
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 
@@ -57,10 +61,11 @@ const statusColumns = {
 }
 
 // Droppable Column Component
-function DroppableColumn({ id, title, count, children }: {
+function DroppableColumn({ id, title, count, totalAmount, children }: {
   id: string
   title: string
   count: number
+  totalAmount: number
   children: React.ReactNode
 }) {
   const { setNodeRef, isOver } = useDroppable({ id })
@@ -86,7 +91,12 @@ function DroppableColumn({ id, title, count, children }: {
   }
 
   return (
-    <Card className={`h-full border-t-4 ${getStageColor(id).split(' ').slice(-1)[0].replace('text-', 'border-t-')}`}>
+    <Card 
+      ref={setNodeRef}
+      className={`h-full border-t-4 transition-all duration-200 ${getStageColor(id).split(' ').slice(-1)[0].replace('text-', 'border-t-')} ${
+        isOver ? 'bg-blue-50 border-blue-300 shadow-lg scale-[1.02]' : ''
+      }`}
+    >
       <CardHeader className="pb-4 bg-gradient-to-r from-gray-50 to-gray-100 rounded-t-lg">
         <CardTitle className="flex items-center justify-between text-base font-semibold">
           <div className="flex items-center gap-2">
@@ -100,22 +110,39 @@ function DroppableColumn({ id, title, count, children }: {
             {count}
           </Badge>
         </CardTitle>
+        {/* Total Amount Display */}
+        <div className="text-sm text-gray-600 mt-2">
+          <div className="flex items-center justify-between">
+            <span>Total Amount:</span>
+            <span className="font-medium text-green-700">
+              ₹{totalAmount.toLocaleString()}
+            </span>
+          </div>
+        </div>
       </CardHeader>
-      <CardContent
-        ref={setNodeRef}
-        className={`p-4 space-y-3 min-h-96 transition-colors ${
-          isOver ? 'bg-blue-50 border-blue-200' : ''
-        }`}
-      >
-        {children}
-        {/* Empty state */}
-        {count === 0 && (
-          <div className="flex flex-col items-center justify-center py-12 text-gray-400">
-            <div className="text-4xl mb-2">{getStageIcon(id)}</div>
-            <div className="text-sm">No applications</div>
+      <div className="p-4 space-y-3 min-h-96">
+        <CardContent className="p-0">
+          {children}
+          {/* Empty state */}
+          {count === 0 && (
+            <div className="flex flex-col items-center justify-center py-12 text-gray-400">
+              <div className="text-4xl mb-2">{getStageIcon(id)}</div>
+              <div className="text-sm">No applications</div>
+              {isOver && (
+                <div className="text-blue-600 text-sm font-medium mt-4 animate-bounce">
+                  Drop application here
+                </div>
+              )}
+            </div>
+          )}
+        </CardContent>
+        {/* Visual feedback when dragging over */}
+        {isOver && count > 0 && (
+          <div className="text-center text-blue-600 text-sm font-medium py-3 border-2 border-dashed border-blue-300 rounded-lg bg-blue-50 animate-pulse">
+            Drop application here
           </div>
         )}
-      </CardContent>
+      </div>
     </Card>
   )
 }
@@ -132,7 +159,7 @@ function DraggableApplicationCard({ application, onClick }: {
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: application.id })
+  } = useSortable({ id: `app-${application.id}` })
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -146,31 +173,44 @@ function DraggableApplicationCard({ application, onClick }: {
       style={style}
       {...attributes}
       {...listeners}
-      className="p-4 cursor-pointer hover:shadow-lg hover:scale-[1.02] transition-all duration-200 border border-gray-200 hover:border-blue-300 bg-white"
-      onClick={onClick}
+      className="p-2 hover:shadow-md hover:scale-[1.01] transition-all duration-200 border border-gray-200 hover:border-blue-300 bg-white relative cursor-grab active:cursor-grabbing"
     >
-      <div className="space-y-2">
+      {/* View Details Button */}
+      <div 
+        className="absolute top-1 right-1 p-0.5 hover:bg-blue-100 rounded z-10"
+        title="Click to view details"
+        onMouseDown={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.stopPropagation()
+          onClick()
+        }}
+      >
+        <Eye className="w-3 h-3 text-blue-600" />
+      </div>
+
+      {/* Card Content */}
+      <div className="space-y-1 pr-6">
         {/* Line 1: Customer Name */}
-        <div className="font-semibold text-gray-900 text-sm truncate">
+        <div className="font-medium text-gray-900 text-xs truncate">
           {application.lead?.name || 'Unknown Customer'}
         </div>
 
-        {/* Line 2: Mobile Number */}
-        <div className="text-sm text-gray-600 font-mono">
-          📱 {application.lead?.mobile_no || 'No mobile'}
-        </div>
-
-        {/* Line 3: Agent Name */}
-        <div className="text-sm text-blue-600 truncate">
-          👤 {application.agent?.name || 'Unassigned'}
-        </div>
-
-        {/* Additional info in a subtle way */}
-        <div className="flex items-center justify-between pt-2 border-t border-gray-100">
-          <div className="text-xs font-medium text-green-600">
+        {/* Line 2: Mobile & Amount in one line */}
+        <div className="flex items-center justify-between text-xs">
+          <div className="text-gray-600 font-mono truncate">
+            📱 {application.lead?.mobile_no || 'No mobile'}
+          </div>
+          <div className="text-green-600 font-medium">
             ₹{application.loan_amount?.toLocaleString() || '0'}
           </div>
-          <div className="text-xs text-gray-400">
+        </div>
+
+        {/* Line 3: Agent & Date */}
+        <div className="flex items-center justify-between text-xs">
+          <div className="text-blue-600 truncate">
+            👤 {application.agent?.name || 'Unassigned'}
+          </div>
+          <div className="text-gray-400">
             {new Date(application.created_at).toLocaleDateString('en-IN', {
               day: '2-digit',
               month: 'short'
@@ -190,6 +230,17 @@ export default function ApplicationsPage() {
   const [selectedApplication, setSelectedApplication] = useState<Application | null>(null)
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
   const [activeId, setActiveId] = useState<string | null>(null)
+  const [isDisbursementDialogOpen, setIsDisbursementDialogOpen] = useState(false)
+  const [pendingDisbursement, setPendingDisbursement] = useState<{applicationId: string, application: Application} | null>(null)
+  const [disbursedAmount, setDisbursedAmount] = useState('')
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 3,
+      },
+    })
+  )
 
   useEffect(() => {
     fetchApplications()
@@ -207,6 +258,8 @@ export default function ApplicationsPage() {
         .order('created_at', { ascending: false })
 
       if (error) throw error
+      console.log('Fetched applications:', data)
+      console.log('Application IDs:', data?.map(app => ({ id: app.id, type: typeof app.id })))
       setApplications(data || [])
     } catch (error) {
       console.error('Error fetching applications:', error)
@@ -218,14 +271,37 @@ export default function ApplicationsPage() {
 
   const handleUpdateApplication = async (applicationId: string, updates: Partial<Application>) => {
     try {
+      // Filter out fields that don't belong to the applications table
+      const { lead, agent, ...applicationUpdates } = updates
+      
+      // Update the applications table
       const { error } = await supabase
         .from('applications')
-        .update({ ...updates, updated_at: new Date().toISOString() })
+        .update({ ...applicationUpdates, updated_at: new Date().toISOString() })
         .eq('id', applicationId)
 
       if (error) throw error
 
-      toast.success('Application updated successfully')
+      // Update lead name if it was changed
+      if (lead?.name !== undefined) {
+        const selectedApp = applications.find(app => String(app.id) === String(applicationId))
+        if (selectedApp && selectedApp.lead_id) {
+          const { error: leadError } = await supabase
+            .from('leads')
+            .update({ name: lead.name })
+            .eq('id', selectedApp.lead_id)
+          
+          if (leadError) {
+            console.error('Error updating lead name:', leadError)
+            toast.error('Application updated but failed to update customer name')
+          } else {
+            toast.success('Application and customer name updated successfully')
+          }
+        }
+      } else {
+        toast.success('Application updated successfully')
+      }
+
       fetchApplications()
       setIsEditDialogOpen(false)
     } catch (error) {
@@ -235,7 +311,9 @@ export default function ApplicationsPage() {
   }
 
   const handleDragStart = (event: DragStartEvent) => {
-    setActiveId(event.active.id as string)
+    const activeId = String(event.active.id)
+    const applicationId = activeId.startsWith('app-') ? activeId.replace('app-', '') : activeId
+    setActiveId(applicationId)
   }
 
   const handleDragEnd = async (event: DragEndEvent) => {
@@ -244,17 +322,53 @@ export default function ApplicationsPage() {
 
     if (!over) return
 
-    const applicationId = active.id as string
-    const newStage = over.id as string
+    const activeId = String(active.id)
+    const overId = String(over.id)
+    
+    console.log('Raw drag data - activeId:', activeId, 'overId:', overId, 'over object:', over)
+    
+    // Extract application ID (remove 'app-' prefix)
+    const applicationId = activeId.startsWith('app-') ? activeId.replace('app-', '') : activeId
+    
+    // Check if dropping on a droppable zone (stage) or another application
+    if (!overId.startsWith('stage-')) {
+      console.log('Not dropped on a stage, ignoring. OverId:', overId)
+      return
+    }
+    
+    // Extract stage name from the droppable zone ID (remove 'stage-' prefix)
+    const newStage = overId.replace('stage-', '')
+    
+    console.log('Drag ended - activeId:', activeId, 'applicationId:', applicationId, 'overId:', overId, 'newStage:', newStage)
 
-    // Find the application being moved
-    const application = applications.find(app => app.id === applicationId)
-    if (!application || application.stage === newStage) return
+    // Find the application being moved (handle both string and number IDs)
+    const application = applications.find(app => String(app.id) === String(applicationId))
+    console.log('Found application:', application, 'current stage:', application?.stage, 'new stage:', newStage)
+    console.log('Looking for ID:', applicationId, 'Available IDs:', applications.map(app => app.id))
+    
+    if (!application) {
+      console.log('Application not found for ID:', applicationId)
+      return
+    }
+    
+    if (application.stage === newStage) {
+      console.log('Same stage, skipping update')
+      return
+    }
 
+    // If moving to Disbursed stage, show disbursement dialog
+    if (newStage === 'Disbursed') {
+      setPendingDisbursement({ applicationId, application })
+      setDisbursedAmount(application.disbursed_amount?.toString() || application.loan_amount?.toString() || '')
+      setIsDisbursementDialogOpen(true)
+      return
+    }
+
+    // For other stages, update directly
     // Optimistically update the UI
     setApplications(prev =>
       prev.map(app =>
-        app.id === applicationId
+        String(app.id) === String(applicationId)
           ? { ...app, stage: newStage }
           : app
       )
@@ -275,6 +389,43 @@ export default function ApplicationsPage() {
       toast.error('Failed to update application stage')
       // Revert the optimistic update
       fetchApplications()
+    }
+  }
+
+  const handleDisbursementConfirm = async () => {
+    if (!pendingDisbursement || !disbursedAmount) {
+      toast.error('Please enter a disbursed amount')
+      return
+    }
+
+    const { applicationId } = pendingDisbursement
+    const amount = parseFloat(disbursedAmount)
+
+    if (isNaN(amount) || amount <= 0) {
+      toast.error('Please enter a valid amount')
+      return
+    }
+
+    try {
+      const { error } = await supabase
+        .from('applications')
+        .update({
+          stage: 'Disbursed',
+          disbursed_amount: amount,
+          disbursed_date: new Date().toISOString()
+        })
+        .eq('id', applicationId)
+
+      if (error) throw error
+
+      toast.success('Application disbursed successfully')
+      fetchApplications()
+      setIsDisbursementDialogOpen(false)
+      setPendingDisbursement(null)
+      setDisbursedAmount('')
+    } catch (error) {
+      console.error('Error disbursing application:', error)
+      toast.error('Failed to disburse application')
     }
   }
 
@@ -309,6 +460,19 @@ export default function ApplicationsPage() {
     acc[stage] = filteredApplications.filter(app => app.stage === stage)
     return acc
   }, {} as Record<string, Application[]>)
+
+  // Calculate total amounts for each stage
+  const stageTotals = Object.keys(statusColumns).reduce((acc, stage) => {
+    const apps = groupedApplications[stage] || []
+    if (stage === 'Disbursed') {
+      // For disbursed stage, sum up disbursed amounts
+      acc[stage] = apps.reduce((sum, app) => sum + (app.disbursed_amount || 0), 0)
+    } else {
+      // For other stages, sum up loan amounts
+      acc[stage] = apps.reduce((sum, app) => sum + (app.loan_amount || 0), 0)
+    }
+    return acc
+  }, {} as Record<string, number>)
 
   if (loading) {
     return (
@@ -358,17 +522,23 @@ export default function ApplicationsPage() {
 
       {/* Modern Kanban Board with Drag & Drop */}
       <div className="w-full overflow-x-auto">
-        <DndContext onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+        <DndContext 
+          sensors={sensors} 
+          collisionDetection={closestCenter}
+          onDragStart={handleDragStart} 
+          onDragEnd={handleDragEnd}
+        >
           <div className="flex gap-6 min-w-full pb-4" style={{ minWidth: 'max-content' }}>
             {Object.entries(statusColumns).map(([stage, title]) => (
               <div key={stage} className="flex-1 min-w-80">
                 <DroppableColumn
-                  id={stage}
+                  id={`stage-${stage}`}
                   title={title}
                   count={groupedApplications[stage]?.length || 0}
+                  totalAmount={stageTotals[stage] || 0}
                 >
                   <SortableContext
-                    items={groupedApplications[stage]?.map(app => app.id) || []}
+                    items={groupedApplications[stage]?.map(app => `app-${app.id}`) || []}
                     strategy={verticalListSortingStrategy}
                   >
                     {groupedApplications[stage]?.map((application) => (
@@ -413,11 +583,20 @@ export default function ApplicationsPage() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <Label>Customer Name</Label>
-                  <Input value={selectedApplication.lead.name} disabled />
+                  <Input 
+                    value={selectedApplication.lead?.name || ''} 
+                    onChange={(e) => setSelectedApplication({
+                      ...selectedApplication,
+                      lead: {
+                        ...selectedApplication.lead,
+                        name: e.target.value
+                      }
+                    })}
+                  />
                 </div>
                 <div>
                   <Label>Mobile</Label>
-                  <Input value={selectedApplication.lead.mobile_no} disabled />
+                  <Input value={selectedApplication.lead?.mobile_no || ''} disabled />
                 </div>
               </div>
               
@@ -462,10 +641,10 @@ export default function ApplicationsPage() {
                     id="interest_rate"
                     type="number"
                     step="0.01"
-                    defaultValue={selectedApplication.interest_rate}
+                    defaultValue={selectedApplication.interest_rate || ''}
                     onChange={(e) => setSelectedApplication({
                       ...selectedApplication,
-                      interest_rate: Number(e.target.value)
+                      interest_rate: Number(e.target.value) || undefined
                     })}
                   />
                 </div>
@@ -474,10 +653,10 @@ export default function ApplicationsPage() {
                   <Input
                     id="tenure_months"
                     type="number"
-                    defaultValue={selectedApplication.tenure_months}
+                    defaultValue={selectedApplication.tenure_months || ''}
                     onChange={(e) => setSelectedApplication({
                       ...selectedApplication,
-                      tenure_months: Number(e.target.value)
+                      tenure_months: Number(e.target.value) || undefined
                     })}
                   />
                 </div>
@@ -489,10 +668,10 @@ export default function ApplicationsPage() {
                   <Input
                     id="monthly_emi"
                     type="number"
-                    defaultValue={selectedApplication.monthly_emi}
+                    defaultValue={selectedApplication.monthly_emi || ''}
                     onChange={(e) => setSelectedApplication({
                       ...selectedApplication,
-                      monthly_emi: Number(e.target.value)
+                      monthly_emi: Number(e.target.value) || undefined
                     })}
                   />
                 </div>
@@ -501,10 +680,10 @@ export default function ApplicationsPage() {
                   <Input
                     id="disbursed_amount"
                     type="number"
-                    defaultValue={selectedApplication.disbursed_amount}
+                    defaultValue={selectedApplication.disbursed_amount || ''}
                     onChange={(e) => setSelectedApplication({
                       ...selectedApplication,
-                      disbursed_amount: Number(e.target.value)
+                      disbursed_amount: Number(e.target.value) || undefined
                     })}
                   />
                 </div>
@@ -516,7 +695,7 @@ export default function ApplicationsPage() {
                   <Input
                     id="disbursed_date"
                     type="date"
-                    defaultValue={selectedApplication.disbursed_date?.split('T')[0]}
+                    defaultValue={selectedApplication.disbursed_date?.split('T')[0] || ''}
                     onChange={(e) => setSelectedApplication({
                       ...selectedApplication,
                       disbursed_date: e.target.value
@@ -547,6 +726,54 @@ export default function ApplicationsPage() {
               </div>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Disbursement Dialog */}
+      <Dialog open={isDisbursementDialogOpen} onOpenChange={setIsDisbursementDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Disburse Application</DialogTitle>
+            <DialogDescription>
+              Enter the disbursed amount for {pendingDisbursement?.application.lead?.name}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label>Loan Amount</Label>
+              <Input
+                value={`₹${pendingDisbursement?.application.loan_amount?.toLocaleString()}`}
+                disabled
+              />
+            </div>
+            <div>
+              <Label htmlFor="disbursed-amount">Disbursed Amount *</Label>
+              <Input
+                id="disbursed-amount"
+                type="number"
+                value={disbursedAmount}
+                onChange={(e) => setDisbursedAmount(e.target.value)}
+                placeholder="Enter disbursed amount"
+                min="0"
+                step="1000"
+              />
+            </div>
+            <div className="flex justify-end space-x-2">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setIsDisbursementDialogOpen(false)
+                  setPendingDisbursement(null)
+                  setDisbursedAmount('')
+                }}
+              >
+                Cancel
+              </Button>
+              <Button onClick={handleDisbursementConfirm}>
+                Confirm Disbursement
+              </Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

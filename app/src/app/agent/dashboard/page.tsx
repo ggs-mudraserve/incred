@@ -18,6 +18,7 @@ export default function AgentDashboard() {
   const [leads, setLeads] = useState<Lead[]>([])
   const [loading, setLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
+  const [searchQuery, setSearchQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<string>('all')
   const [fromDate, setFromDate] = useState('')
   const [toDate, setToDate] = useState('')
@@ -29,7 +30,7 @@ export default function AgentDashboard() {
     if (profile) {
       fetchLeads()
     }
-  }, [profile, currentPage, searchTerm, statusFilter, fromDate, toDate])
+  }, [profile, currentPage, searchQuery, statusFilter, fromDate, toDate])
 
   const fetchLeads = async () => {
     if (!profile) return
@@ -45,8 +46,8 @@ export default function AgentDashboard() {
         .range((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage - 1)
 
       // Apply search filter
-      if (searchTerm) {
-        query = query.or(`app_no.ilike.%${searchTerm}%,mobile_no.ilike.%${searchTerm}%,name.ilike.%${searchTerm}%`)
+      if (searchQuery) {
+        query = query.or(`app_no.ilike.%${searchQuery}%,mobile_no.ilike.%${searchQuery}%,name.ilike.%${searchQuery}%`)
       }
 
       // Apply status filter
@@ -79,6 +80,17 @@ export default function AgentDashboard() {
       toast.error('Failed to fetch leads')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleSearch = () => {
+    setSearchQuery(searchTerm)
+    setCurrentPage(1) // Reset to first page when searching
+  }
+
+  const handleSearchKeyPress = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      handleSearch()
     }
   }
 
@@ -172,6 +184,26 @@ export default function AgentDashboard() {
     }
   }
 
+  const updateLeadName = async (leadId: number, newName: string) => {
+    try {
+      const { error } = await supabase
+        .from('leads')
+        .update({ name: newName })
+        .eq('id', leadId)
+
+      if (error) {
+        console.error('Error updating lead name:', error)
+        toast.error('Failed to update lead name')
+      } else {
+        toast.success('Lead name updated successfully')
+        fetchLeads() // Refresh the data
+      }
+    } catch (error) {
+      console.error('Error updating lead name:', error)
+      toast.error('Failed to update lead name')
+    }
+  }
+
   const exportToCSV = () => {
     if (leads.length === 0) return
     
@@ -225,14 +257,20 @@ export default function AgentDashboard() {
             {/* First Row: Search and Status */}
             <div className="flex flex-col sm:flex-row gap-4">
               <div className="flex-1">
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
-                  <Input
-                    placeholder="Search by app no, mobile, or name..."
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    className="pl-10"
-                  />
+                <div className="flex gap-2">
+                  <div className="relative flex-1">
+                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
+                    <Input
+                      placeholder="Search by app no, mobile, or name..."
+                      value={searchTerm}
+                      onChange={(e) => setSearchTerm(e.target.value)}
+                      onKeyPress={handleSearchKeyPress}
+                      className="pl-10"
+                    />
+                  </div>
+                  <Button onClick={handleSearch} variant="outline" size="default">
+                    Search
+                  </Button>
                 </div>
               </div>
               <div>
@@ -275,13 +313,15 @@ export default function AgentDashboard() {
               </div>
 
               {/* Clear Filters Button */}
-              {(statusFilter !== 'all' || fromDate || toDate) && (
+              {(statusFilter !== 'all' || fromDate || toDate || searchQuery) && (
                 <Button
                   variant="outline"
                   onClick={() => {
                     setStatusFilter('all')
                     setFromDate('')
                     setToDate('')
+                    setSearchTerm('')
+                    setSearchQuery('')
                   }}
                 >
                   Clear Filters
@@ -327,7 +367,29 @@ export default function AgentDashboard() {
               {leads.map((lead) => (
                 <TableRow key={lead.id}>
                   <TableCell className="font-medium">{lead.app_no}</TableCell>
-                  <TableCell>{lead.name || '-'}</TableCell>
+                  <TableCell>
+                    <Input
+                      type="text"
+                      defaultValue={lead.name || ''}
+                      onBlur={(e) => {
+                        const newName = e.target.value.trim()
+                        if (newName.length >= 2 && newName !== lead.name) {
+                          updateLeadName(lead.id, newName)
+                        }
+                      }}
+                      onKeyPress={(e) => {
+                        if (e.key === 'Enter') {
+                          const newName = (e.target as HTMLInputElement).value.trim()
+                          if (newName.length >= 2 && newName !== lead.name) {
+                            updateLeadName(lead.id, newName)
+                          }
+                          ;(e.target as HTMLInputElement).blur()
+                        }
+                      }}
+                      placeholder="Enter name"
+                      className="w-32"
+                    />
+                  </TableCell>
                   <TableCell>{lead.mobile_no}</TableCell>
                   <TableCell>
                     <Input
