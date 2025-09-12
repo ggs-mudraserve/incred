@@ -7,10 +7,11 @@ import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
-import { Search, Filter, Edit, UserPlus, MessageSquare, Plus } from 'lucide-react'
+import { Search, Filter, Edit, UserPlus, MessageSquare, Plus, Trash2 } from 'lucide-react'
 import { supabase, LeadNote } from '@/lib/supabase'
 import { toast } from 'sonner'
 
@@ -59,6 +60,9 @@ export default function LeadsPage() {
   const [leadNotes, setLeadNotes] = useState<LeadNoteWithAuthor[]>([])
   const [newNote, setNewNote] = useState('')
   const [loadingNotes, setLoadingNotes] = useState(false)
+  const [selectedLeads, setSelectedLeads] = useState<Set<string>>(new Set())
+  const [showBulkDeleteDialog, setShowBulkDeleteDialog] = useState(false)
+  const [bulkDeleting, setBulkDeleting] = useState(false)
 
   useEffect(() => {
     fetchLeads()
@@ -187,6 +191,48 @@ export default function LeadsPage() {
     }
   }
 
+  const handleSelectAll = (checked: boolean) => {
+    if (checked) {
+      setSelectedLeads(new Set(filteredLeads.map(lead => lead.id)))
+    } else {
+      setSelectedLeads(new Set())
+    }
+  }
+
+  const handleSelectLead = (leadId: string, checked: boolean) => {
+    const newSelected = new Set(selectedLeads)
+    if (checked) {
+      newSelected.add(leadId)
+    } else {
+      newSelected.delete(leadId)
+    }
+    setSelectedLeads(newSelected)
+  }
+
+  const handleBulkDelete = async () => {
+    if (selectedLeads.size === 0) return
+
+    setBulkDeleting(true)
+    try {
+      const { error } = await supabase
+        .from('leads')
+        .delete()
+        .in('id', Array.from(selectedLeads))
+
+      if (error) throw error
+      
+      toast.success(`Successfully deleted ${selectedLeads.size} leads`)
+      setSelectedLeads(new Set())
+      setShowBulkDeleteDialog(false)
+      fetchLeads() // Refresh the data
+    } catch (error) {
+      console.error('Error deleting leads:', error)
+      toast.error('Failed to delete leads')
+    } finally {
+      setBulkDeleting(false)
+    }
+  }
+
   const filteredLeads = leads.filter(lead => {
     const matchesSearch = lead.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          lead.mobile_no?.includes(searchTerm) ||
@@ -242,10 +288,24 @@ export default function LeadsPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>All Leads</CardTitle>
-          <CardDescription>
-            View and manage all leads in the system with advanced filtering
-          </CardDescription>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle>All Leads</CardTitle>
+              <CardDescription>
+                View and manage all leads in the system with advanced filtering
+              </CardDescription>
+            </div>
+            {selectedLeads.size > 0 && (
+              <Button
+                variant="destructive"
+                onClick={() => setShowBulkDeleteDialog(true)}
+                className="ml-4"
+              >
+                <Trash2 className="h-4 w-4 mr-2" />
+                Delete Selected ({selectedLeads.size})
+              </Button>
+            )}
+          </div>
         </CardHeader>
         <CardContent>
           <div className="mb-6">
@@ -342,6 +402,13 @@ export default function LeadsPage() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead className="w-12">
+                    <Checkbox
+                      checked={selectedLeads.size === filteredLeads.length && filteredLeads.length > 0}
+                      onCheckedChange={handleSelectAll}
+                      aria-label="Select all"
+                    />
+                  </TableHead>
                   <TableHead>App No</TableHead>
                   <TableHead>Name</TableHead>
                   <TableHead>Mobile</TableHead>
@@ -355,6 +422,13 @@ export default function LeadsPage() {
               <TableBody>
                 {filteredLeads.map((lead) => (
                   <TableRow key={lead.id}>
+                    <TableCell>
+                      <Checkbox
+                        checked={selectedLeads.has(lead.id)}
+                        onCheckedChange={(checked) => handleSelectLead(lead.id, checked as boolean)}
+                        aria-label={`Select lead ${lead.app_no}`}
+                      />
+                    </TableCell>
                     <TableCell className="font-medium">{lead.app_no}</TableCell>
                     <TableCell>{lead.name}</TableCell>
                     <TableCell>{lead.mobile_no}</TableCell>
@@ -633,6 +707,45 @@ export default function LeadsPage() {
                 )}
               </div>
             </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Bulk Delete Confirmation Dialog */}
+      <Dialog open={showBulkDeleteDialog} onOpenChange={setShowBulkDeleteDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Selected Leads</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete {selectedLeads.size} selected lead{selectedLeads.size !== 1 ? 's' : ''}? 
+              This action cannot be undone and will also delete all associated notes and applications.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end space-x-2 mt-6">
+            <Button 
+              variant="outline" 
+              onClick={() => setShowBulkDeleteDialog(false)}
+              disabled={bulkDeleting}
+            >
+              Cancel
+            </Button>
+            <Button 
+              variant="destructive" 
+              onClick={handleBulkDelete}
+              disabled={bulkDeleting}
+            >
+              {bulkDeleting ? (
+                <>
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                  Deleting...
+                </>
+              ) : (
+                <>
+                  <Trash2 className="h-4 w-4 mr-2" />
+                  Delete {selectedLeads.size} Lead{selectedLeads.size !== 1 ? 's' : ''}
+                </>
+              )}
+            </Button>
           </div>
         </DialogContent>
       </Dialog>
