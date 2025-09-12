@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Search, Filter, Edit, UserPlus, MessageSquare, Plus, Trash2 } from 'lucide-react'
-import { supabase, LeadNote } from '@/lib/supabase'
+import { supabase, LeadNote, StatusEnum, Constants } from '@/lib/supabase'
 import { toast } from 'sonner'
 
 interface Lead {
@@ -49,6 +49,7 @@ export default function LeadsPage() {
   const [loading, setLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
+  const [finalStatusFilter, setFinalStatusFilter] = useState('all')
   const [agentFilter, setAgentFilter] = useState('all')
   const [fromDate, setFromDate] = useState('')
   const [toDate, setToDate] = useState('')
@@ -136,6 +137,76 @@ export default function LeadsPage() {
     } catch (error) {
       console.error('Error updating lead:', error)
       toast.error('Failed to update lead')
+    }
+  }
+
+  const updateLeadStatus = async (leadId: string, newStatus: StatusEnum) => {
+    try {
+      // Define statuses that should set final_status to 'close'
+      const closeStatuses = ['cash salary', 'self employed', 'NI', 'ring more than 3 days', 'salary low', 'cibil issue']
+
+      // Determine final_status based on the new status
+      let finalStatus = 'open'
+      if (closeStatuses.includes(newStatus)) {
+        finalStatus = 'close'
+      }
+
+      // Update the lead with new status and final_status
+      const { error: updateError } = await supabase
+        .from('leads')
+        .update({
+          status: newStatus,
+          final_status: finalStatus
+        })
+        .eq('id', leadId)
+
+      if (updateError) {
+        console.error('Error updating lead status:', updateError)
+        toast.error('Failed to update lead status')
+        return
+      }
+
+      // If status is 'banking received', create a new application
+      if (newStatus === 'banking received') {
+        // First, get the lead details
+        const { data: leadData, error: leadError } = await supabase
+          .from('leads')
+          .select('*')
+          .eq('id', leadId)
+          .single()
+
+        if (leadError) {
+          console.error('Error fetching lead data:', leadError)
+          toast.error('Failed to fetch lead data for application creation')
+          return
+        }
+
+        // Create a new application
+        const { error: appError } = await supabase
+          .from('applications')
+          .insert({
+            lead_id: leadId,
+            loan_amount: leadData.amount || 0,
+            stage: 'UnderReview',
+            agent_id: leadData.agent_id
+          })
+          .select()
+
+        if (appError) {
+          console.error('Error creating application:', appError)
+          toast.error('Failed to create application: ' + appError.message)
+          return
+        }
+
+        toast.success('Lead status updated and application created successfully')
+      } else {
+        toast.success('Lead status updated successfully')
+      }
+
+      fetchLeads() // Refresh the data
+    } catch (error) {
+      console.error('Error updating lead status:', error)
+      toast.error('Failed to update lead status')
     }
   }
 
@@ -238,6 +309,7 @@ export default function LeadsPage() {
                          lead.mobile_no?.includes(searchTerm) ||
                          lead.app_no?.toLowerCase().includes(searchTerm.toLowerCase())
     const matchesStatus = statusFilter === 'all' || lead.status === statusFilter
+    const matchesFinalStatus = finalStatusFilter === 'all' || lead.final_status === finalStatusFilter
     const matchesAgent = agentFilter === 'all' || lead.agent_id === agentFilter
 
     // Date filtering
@@ -255,21 +327,9 @@ export default function LeadsPage() {
       }
     }
 
-    return matchesSearch && matchesStatus && matchesAgent && matchesDate
+    return matchesSearch && matchesStatus && matchesFinalStatus && matchesAgent && matchesDate
   })
 
-  const getStatusColor = (status: string | null) => {
-    if (!status) return 'bg-gray-100 text-gray-800'
-
-    switch (status) {
-      case 'new': return 'bg-blue-100 text-blue-800'
-      case 'contacted': return 'bg-yellow-100 text-yellow-800'
-      case 'qualified': return 'bg-green-100 text-green-800'
-      case 'not_interested': return 'bg-red-100 text-red-800'
-      case 'follow_up': return 'bg-purple-100 text-purple-800'
-      default: return 'bg-gray-100 text-gray-800'
-    }
-  }
 
   if (loading) {
     return (
@@ -344,6 +404,21 @@ export default function LeadsPage() {
               </div>
 
               <div>
+                <Label className="text-sm text-gray-600">Final Status</Label>
+                <Select value={finalStatusFilter} onValueChange={setFinalStatusFilter}>
+                  <SelectTrigger className="w-48">
+                    <Filter className="h-4 w-4 mr-2" />
+                    <SelectValue placeholder="Filter by final status" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Final Status</SelectItem>
+                    <SelectItem value="open">Open</SelectItem>
+                    <SelectItem value="close">Close</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div>
                 <Label className="text-sm text-gray-600">Agent</Label>
                 <Select value={agentFilter} onValueChange={setAgentFilter}>
                   <SelectTrigger className="w-48">
@@ -382,11 +457,12 @@ export default function LeadsPage() {
               </div>
 
               {/* Clear Filters Button */}
-              {(statusFilter !== 'all' || agentFilter !== 'all' || fromDate || toDate) && (
+              {(statusFilter !== 'all' || finalStatusFilter !== 'all' || agentFilter !== 'all' || fromDate || toDate) && (
                 <Button
                   variant="outline"
                   onClick={() => {
                     setStatusFilter('all')
+                    setFinalStatusFilter('all')
                     setAgentFilter('all')
                     setFromDate('')
                     setToDate('')
@@ -414,6 +490,7 @@ export default function LeadsPage() {
                   <TableHead>Mobile</TableHead>
                   <TableHead>Amount</TableHead>
                   <TableHead>Status</TableHead>
+                  <TableHead>Final Status</TableHead>
                   <TableHead>Assigned Agent</TableHead>
                   <TableHead>Created</TableHead>
                   <TableHead>Actions</TableHead>
@@ -434,8 +511,25 @@ export default function LeadsPage() {
                     <TableCell>{lead.mobile_no}</TableCell>
                     <TableCell>₹{lead.amount?.toLocaleString()}</TableCell>
                     <TableCell>
-                      <Badge className={getStatusColor(lead.status)}>
-                        {lead.status ? lead.status.replace('_', ' ') : 'No Status'}
+                      <Select
+                        value={lead.status || undefined}
+                        onValueChange={(value) => updateLeadStatus(lead.id, value as StatusEnum)}
+                      >
+                        <SelectTrigger className="w-40">
+                          <SelectValue placeholder="Select status" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {Constants.public.Enums.status_enum.map((status) => (
+                            <SelectItem key={status} value={status}>
+                              {status}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant={lead.final_status === 'open' ? 'default' : 'secondary'}>
+                        {lead.final_status}
                       </Badge>
                     </TableCell>
                     <TableCell>

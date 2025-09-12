@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Textarea } from '@/components/ui/textarea'
 import { supabase, Lead, LeadNote, StatusEnum, Constants } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
-import { Search, Download, MessageSquare, Plus } from 'lucide-react'
+import { Search, MessageSquare, Plus } from 'lucide-react'
 import { toast } from 'sonner'
 
 interface LeadNoteWithAuthor extends LeadNote {
@@ -28,6 +28,7 @@ export default function AgentDashboard() {
   const [searchTerm, setSearchTerm] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<string>('all')
+  const [finalStatusFilter, setFinalStatusFilter] = useState<string>('all')
   const [fromDate, setFromDate] = useState('')
   const [toDate, setToDate] = useState('')
   const [currentPage, setCurrentPage] = useState(1)
@@ -43,7 +44,7 @@ export default function AgentDashboard() {
     if (profile) {
       fetchLeads()
     }
-  }, [profile, currentPage, searchQuery, statusFilter, fromDate, toDate])
+  }, [profile, currentPage, searchQuery, statusFilter, finalStatusFilter, fromDate, toDate])
 
   const fetchLeads = async () => {
     if (!profile) return
@@ -66,6 +67,11 @@ export default function AgentDashboard() {
       // Apply status filter
       if (statusFilter !== 'all') {
         query = query.eq('status', statusFilter)
+      }
+
+      // Apply final status filter
+      if (finalStatusFilter !== 'all') {
+        query = query.eq('final_status', finalStatusFilter)
       }
 
       // Apply date filters
@@ -217,31 +223,6 @@ export default function AgentDashboard() {
     }
   }
 
-  const exportToCSV = () => {
-    if (leads.length === 0) return
-    
-    const headers = ['App No', 'Name', 'Mobile', 'Amount', 'Status', 'Final Status', 'Uploaded At']
-    const csvContent = [
-      headers.join(','),
-      ...leads.map(lead => [
-        lead.app_no,
-        lead.name || '',
-        lead.mobile_no,
-        lead.amount || '',
-        lead.status || '',
-        lead.final_status,
-        new Date(lead.uploaded_at).toLocaleDateString()
-      ].join(','))
-    ].join('\n')
-    
-    const blob = new Blob([csvContent], { type: 'text/csv' })
-    const url = window.URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = 'my-leads.csv'
-    a.click()
-    window.URL.revokeObjectURL(url)
-  }
 
   const fetchLeadNotes = async (leadId: string | number) => {
     try {
@@ -318,86 +299,94 @@ export default function AgentDashboard() {
           <CardTitle>Filters</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="space-y-4">
-            {/* First Row: Search and Status */}
-            <div className="flex flex-col sm:flex-row gap-4">
-              <div className="flex-1">
-                <div className="flex gap-2">
-                  <div className="relative flex-1">
-                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
-                    <Input
-                      placeholder="Search by app no, mobile, or name..."
-                      value={searchTerm}
-                      onChange={(e) => setSearchTerm(e.target.value)}
-                      onKeyPress={handleSearchKeyPress}
-                      className="pl-10"
-                    />
-                  </div>
-                  <Button onClick={handleSearch} variant="outline" size="default">
-                    Search
-                  </Button>
+          {/* All Filters in One Row */}
+          <div className="flex flex-wrap gap-4 items-end">
+            <div className="flex-1 min-w-64">
+              <div className="flex gap-2">
+                <div className="relative flex-1">
+                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
+                  <Input
+                    placeholder="Search by app no, mobile, or name..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    onKeyPress={handleSearchKeyPress}
+                    className="pl-10"
+                  />
                 </div>
-              </div>
-              <div>
-                <Label className="text-sm text-gray-600">Status</Label>
-                <Select value={statusFilter} onValueChange={setStatusFilter}>
-                  <SelectTrigger className="w-48">
-                    <SelectValue placeholder="Filter by status" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Statuses</SelectItem>
-                    {Constants.public.Enums.status_enum.map((status) => (
-                      <SelectItem key={status} value={status}>
-                        {status}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-
-            {/* Second Row: Date Filters and Export */}
-            <div className="flex flex-col sm:flex-row gap-4 items-end">
-              <div>
-                <Label className="text-sm text-gray-600">From Date</Label>
-                <Input
-                  type="date"
-                  value={fromDate}
-                  onChange={(e) => setFromDate(e.target.value)}
-                  className="w-40"
-                />
-              </div>
-              <div>
-                <Label className="text-sm text-gray-600">To Date</Label>
-                <Input
-                  type="date"
-                  value={toDate}
-                  onChange={(e) => setToDate(e.target.value)}
-                  className="w-40"
-                />
-              </div>
-
-              {/* Clear Filters Button */}
-              {(statusFilter !== 'all' || fromDate || toDate || searchQuery) && (
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setStatusFilter('all')
-                    setFromDate('')
-                    setToDate('')
-                    setSearchTerm('')
-                    setSearchQuery('')
-                  }}
-                >
-                  Clear Filters
+                <Button onClick={handleSearch} variant="outline" size="default">
+                  Search
                 </Button>
-              )}
-
-              <Button onClick={exportToCSV} variant="outline">
-                <Download className="h-4 w-4 mr-2" />
-                Export CSV
-              </Button>
+              </div>
             </div>
+
+            <div>
+              <Label className="text-sm text-gray-600">Status</Label>
+              <Select value={statusFilter} onValueChange={setStatusFilter}>
+                <SelectTrigger className="w-48">
+                  <SelectValue placeholder="Filter by status" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Statuses</SelectItem>
+                  {Constants.public.Enums.status_enum.map((status) => (
+                    <SelectItem key={status} value={status}>
+                      {status}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div>
+              <Label className="text-sm text-gray-600">Final Status</Label>
+              <Select value={finalStatusFilter} onValueChange={setFinalStatusFilter}>
+                <SelectTrigger className="w-48">
+                  <SelectValue placeholder="Filter by final status" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Final Status</SelectItem>
+                  <SelectItem value="open">Open</SelectItem>
+                  <SelectItem value="close">Close</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div>
+              <Label className="text-sm text-gray-600">From Date</Label>
+              <Input
+                type="date"
+                value={fromDate}
+                onChange={(e) => setFromDate(e.target.value)}
+                className="w-40"
+              />
+            </div>
+
+            <div>
+              <Label className="text-sm text-gray-600">To Date</Label>
+              <Input
+                type="date"
+                value={toDate}
+                onChange={(e) => setToDate(e.target.value)}
+                className="w-40"
+              />
+            </div>
+
+            {/* Clear Filters Button */}
+            {(statusFilter !== 'all' || finalStatusFilter !== 'all' || fromDate || toDate || searchQuery) && (
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setStatusFilter('all')
+                  setFinalStatusFilter('all')
+                  setFromDate('')
+                  setToDate('')
+                  setSearchTerm('')
+                  setSearchQuery('')
+                }}
+              >
+                Clear Filters
+              </Button>
+            )}
+
           </div>
         </CardContent>
       </Card>
