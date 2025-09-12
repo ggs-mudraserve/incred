@@ -8,10 +8,18 @@ import { Label } from '@/components/ui/label'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
-import { supabase, Lead, StatusEnum, Constants } from '@/lib/supabase'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Textarea } from '@/components/ui/textarea'
+import { supabase, Lead, LeadNote, StatusEnum, Constants } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
-import { Search, Download, MessageSquare } from 'lucide-react'
+import { Search, Download, MessageSquare, Plus } from 'lucide-react'
 import { toast } from 'sonner'
+
+interface LeadNoteWithAuthor extends LeadNote {
+  author?: {
+    name: string
+  }
+}
 
 export default function AgentDashboard() {
   const { profile } = useAuth()
@@ -25,6 +33,11 @@ export default function AgentDashboard() {
   const [currentPage, setCurrentPage] = useState(1)
   const [totalCount, setTotalCount] = useState(0)
   const itemsPerPage = 25
+  const [selectedLead, setSelectedLead] = useState<Lead | null>(null)
+  const [isNotesDialogOpen, setIsNotesDialogOpen] = useState(false)
+  const [leadNotes, setLeadNotes] = useState<LeadNoteWithAuthor[]>([])
+  const [newNote, setNewNote] = useState('')
+  const [loadingNotes, setLoadingNotes] = useState(false)
 
   useEffect(() => {
     if (profile) {
@@ -230,6 +243,58 @@ export default function AgentDashboard() {
     window.URL.revokeObjectURL(url)
   }
 
+  const fetchLeadNotes = async (leadId: string | number) => {
+    try {
+      setLoadingNotes(true)
+      const { data, error } = await supabase
+        .from('lead_notes')
+        .select(`
+          *,
+          author:profiles(name)
+        `)
+        .eq('lead_id', leadId)
+        .order('created_at', { ascending: false })
+
+      if (error) {
+        console.error('Supabase error details:', error)
+        throw error
+      }
+      
+      setLeadNotes(data || [])
+    } catch (error) {
+      console.error('Error fetching notes:', error)
+      toast.error('Failed to fetch notes')
+    } finally {
+      setLoadingNotes(false)
+    }
+  }
+
+  const handleAddNote = async () => {
+    if (!selectedLead || !newNote.trim()) return
+
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) throw new Error('No authenticated user')
+
+      const { error } = await supabase
+        .from('lead_notes')
+        .insert({
+          lead_id: selectedLead.id,
+          author_id: user.id,
+          note: newNote.trim()
+        })
+
+      if (error) throw error
+      
+      toast.success('Note added successfully')
+      setNewNote('')
+      fetchLeadNotes(selectedLead.id)
+    } catch (error) {
+      console.error('Error adding note:', error)
+      toast.error('Failed to add note')
+    }
+  }
+
   const totalPages = Math.ceil(totalCount / itemsPerPage)
 
   if (loading) {
@@ -432,7 +497,15 @@ export default function AgentDashboard() {
                     {new Date(lead.created_at).toLocaleDateString()}
                   </TableCell>
                   <TableCell>
-                    <Button variant="outline" size="sm">
+                    <Button 
+                      variant="outline" 
+                      size="sm"
+                      onClick={() => {
+                        setSelectedLead(lead)
+                        fetchLeadNotes(lead.id)
+                        setIsNotesDialogOpen(true)
+                      }}
+                    >
                       <MessageSquare className="h-4 w-4" />
                     </Button>
                   </TableCell>
@@ -465,6 +538,80 @@ export default function AgentDashboard() {
           )}
         </CardContent>
       </Card>
+
+      {/* Notes Dialog */}
+      <Dialog open={isNotesDialogOpen} onOpenChange={setIsNotesDialogOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Lead Notes</DialogTitle>
+            <DialogDescription>
+              Notes for {selectedLead?.name} ({selectedLead?.app_no})
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            {/* Add Note Section */}
+            <div className="space-y-2">
+              <Label htmlFor="new-note">Add New Note</Label>
+              <div className="flex space-x-2">
+                <Textarea
+                  id="new-note"
+                  placeholder="Enter your note (max 500 characters)"
+                  value={newNote}
+                  onChange={(e) => setNewNote(e.target.value)}
+                  maxLength={500}
+                  rows={3}
+                  className="flex-1"
+                />
+                <Button 
+                  onClick={handleAddNote} 
+                  disabled={!newNote.trim()}
+                  className="self-start"
+                >
+                  <Plus className="h-4 w-4 mr-2" />
+                  Add
+                </Button>
+              </div>
+              <div className="text-sm text-gray-500">
+                {newNote.length}/500 characters
+              </div>
+            </div>
+
+            {/* Notes List */}
+            <div className="space-y-2">
+              <Label>Notes History</Label>
+              <div className="max-h-96 overflow-y-auto border rounded-lg">
+                {loadingNotes ? (
+                  <div className="p-4 text-center">
+                    <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600 mx-auto"></div>
+                  </div>
+                ) : leadNotes.length === 0 ? (
+                  <div className="p-4 text-center text-gray-500">
+                    No notes found for this lead
+                  </div>
+                ) : (
+                  <div className="divide-y">
+                    {leadNotes.map((note) => (
+                      <div key={note.id} className="p-4">
+                        <div className="flex justify-between items-start mb-2">
+                          <span className="font-medium text-sm text-blue-600">
+                            {note.author?.name || 'Unknown User'}
+                          </span>
+                          <span className="text-xs text-gray-500">
+                            {new Date(note.created_at).toLocaleString()}
+                          </span>
+                        </div>
+                        <p className="text-sm text-gray-700 whitespace-pre-wrap">
+                          {note.note}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

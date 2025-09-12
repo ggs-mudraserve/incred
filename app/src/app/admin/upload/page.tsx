@@ -1,11 +1,12 @@
 'use client'
 
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Upload, FileText, AlertCircle } from 'lucide-react'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Upload, FileText, Loader2 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { toast } from 'sonner'
 
@@ -13,7 +14,38 @@ export default function UploadLeadsPage() {
   const [file, setFile] = useState<File | null>(null)
   const [uploading, setUploading] = useState(false)
   const [dragActive, setDragActive] = useState(false)
+  const [selectedAgent, setSelectedAgent] = useState<string>('')
+  const [agents, setAgents] = useState<{id: string, name: string}[]>([])
+  const [loadingAgents, setLoadingAgents] = useState(true)
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  // Load agents when component mounts
+  useEffect(() => {
+    loadAgents()
+  }, [])
+
+  const loadAgents = async () => {
+    try {
+      const { data: agentsData, error } = await supabase
+        .from('profiles')
+        .select('id, name')
+        .eq('role', 'agent')
+        .order('name')
+
+      if (error) {
+        console.error('Error loading agents:', error)
+        toast.error('Failed to load agents')
+        return
+      }
+
+      setAgents(agentsData || [])
+    } catch (error) {
+      console.error('Error loading agents:', error)
+      toast.error('Failed to load agents')
+    } finally {
+      setLoadingAgents(false)
+    }
+  }
 
   const clearFileSelection = () => {
     setFile(null)
@@ -64,29 +96,14 @@ export default function UploadLeadsPage() {
       return
     }
 
+    if (!selectedAgent) {
+      toast.error('Please select an agent to assign the leads to')
+      return
+    }
+
     console.log('Starting upload process for file:', file.name, 'Size:', file.size, 'Type:', file.type)
     setUploading(true)
     try {
-      // Check if there are any agents available
-      const { data: agents, error: agentsError } = await supabase
-        .from('profiles')
-        .select('id')
-        .eq('role', 'agent')
-        .limit(1)
-
-      if (agentsError) {
-        console.error('Error checking agents:', agentsError)
-        toast.error('Error checking available agents')
-        return
-      }
-
-      if (!agents || agents.length === 0) {
-        toast.error('No agents available. Please create at least one agent before uploading leads.')
-        return
-      }
-
-      const defaultAgentId = agents[0].id
-
       // Read the CSV file with better error handling
       let text: string
       try {
@@ -148,7 +165,7 @@ export default function UploadLeadsPage() {
         if (!line) continue
 
         const values = line.split(',').map(v => v.trim())
-        const lead: any = {}
+        const lead: Record<string, string | number | null> = {}
 
         // Only include columns that exist in the database
         headers.forEach((header, index) => {
@@ -164,10 +181,9 @@ export default function UploadLeadsPage() {
           lead.amount = parseFloat(lead.amount.replace(/[^0-9.-]/g, '')) || 0
         }
 
-        // Add default values
-        lead.status = 'NI' // Using a valid enum value
+        // Add default values - status is now null by default
         lead.final_status = 'open'
-        lead.agent_id = defaultAgentId
+        lead.agent_id = selectedAgent
         lead.created_at = new Date().toISOString()
         lead.uploaded_at = new Date().toISOString()
         lead.updated_at = new Date().toISOString()
@@ -189,7 +205,7 @@ export default function UploadLeadsPage() {
         console.error('Error uploading leads:', error)
         toast.error('Failed to upload leads')
       } else {
-        toast.success(`Successfully uploaded ${leads.length} leads`)
+        toast.success(`Successfully uploaded ${leads.length} leads and assigned to ${agents.find(a => a.id === selectedAgent)?.name}`)
         clearFileSelection()
       }
     } catch (error) {
@@ -216,6 +232,23 @@ export default function UploadLeadsPage() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            {/* Agent Selection */}
+            <div className="space-y-2">
+              <Label htmlFor="agent-select">Assign leads to agent</Label>
+              <Select value={selectedAgent} onValueChange={setSelectedAgent}>
+                <SelectTrigger id="agent-select">
+                  <SelectValue placeholder={loadingAgents ? "Loading agents..." : "Select an agent"} />
+                </SelectTrigger>
+                <SelectContent>
+                  {agents.map((agent) => (
+                    <SelectItem key={agent.id} value={agent.id}>
+                      {agent.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
             <div
               className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
                 dragActive
@@ -257,43 +290,46 @@ export default function UploadLeadsPage() {
               </div>
             )}
 
-            <Button
-              onClick={handleUpload}
-              disabled={!file || uploading}
+            <Button 
+              onClick={handleUpload} 
+              disabled={!file || uploading || !selectedAgent || loadingAgents}
               className="w-full"
             >
-              {uploading ? 'Uploading...' : 'Upload Leads'}
+              {uploading ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Uploading...
+                </>
+              ) : (
+                'Upload Leads'
+              )}
             </Button>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center space-x-2">
-              <AlertCircle className="h-5 w-5" />
-              <span>CSV Format Requirements</span>
-            </CardTitle>
+            <CardTitle>CSV Format</CardTitle>
+            <CardDescription>
+              Your CSV file should have the following format:
+            </CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="space-y-2 text-sm">
-              <p><strong>Required columns:</strong></p>
-              <ul className="list-disc list-inside space-y-1 text-gray-600">
-                <li><code>app_no</code> - Unique application reference number</li>
-                <li><code>name</code> - Lead's full name</li>
-                <li><code>mobile_no</code> - Mobile phone number</li>
-                <li><code>amount</code> - Requested loan amount</li>
+            <div className="bg-gray-50 rounded-lg p-4">
+              <pre className="text-sm text-gray-700">
+{`app_no,name,mobile_no,amount
+APP001,John Doe,9876543210,100000
+APP002,Jane Smith,9876543211,200000`}
+              </pre>
+            </div>
+            <div className="mt-4 space-y-2">
+              <h4 className="font-medium text-gray-900">Required Columns:</h4>
+              <ul className="text-sm text-gray-600 space-y-1">
+                <li><code className="bg-gray-100 px-1 rounded">app_no</code> - Application number (unique identifier)</li>
+                <li><code className="bg-gray-100 px-1 rounded">name</code> - Full name of the lead</li>
+                <li><code className="bg-gray-100 px-1 rounded">mobile_no</code> - 10-digit mobile number</li>
+                <li><code className="bg-gray-100 px-1 rounded">amount</code> - Loan amount requested</li>
               </ul>
-              <p className="mt-4"><strong>Optional columns (will be ignored during import):</strong></p>
-              <ul className="list-disc list-inside space-y-1 text-gray-600">
-                <li><code>email</code> - Email address (for reference only)</li>
-                <li><code>city</code> - City (for reference only)</li>
-                <li><code>state</code> - State (for reference only)</li>
-                <li><code>income</code> - Monthly income (for reference only)</li>
-                <li><code>employment_type</code> - Employment type (for reference only)</li>
-              </ul>
-              <p className="mt-2 text-sm text-gray-500">
-                <strong>Note:</strong> Only the required columns will be imported into the system. Additional columns can be included for reference but will not be stored.
-              </p>
             </div>
           </CardContent>
         </Card>
