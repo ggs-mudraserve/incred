@@ -48,12 +48,6 @@ export default function AgentDashboard() {
   })
   const [creating, setCreating] = useState(false)
 
-  useEffect(() => {
-    if (profile) {
-      fetchLeads()
-    }
-  }, [profile, currentPage, searchQuery, statusFilter, finalStatusFilter, fromDate, toDate])
-
   const fetchLeads = async () => {
     if (!profile) return
 
@@ -117,6 +111,12 @@ export default function AgentDashboard() {
       setLoading(false)
     }
   }
+
+  useEffect(() => {
+    if (profile) {
+      fetchLeads()
+    }
+  }, [profile, currentPage, searchQuery, statusFilter, finalStatusFilter, fromDate, toDate]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSearch = () => {
     setSearchQuery(searchTerm)

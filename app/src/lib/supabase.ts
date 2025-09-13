@@ -4,7 +4,23 @@ import { Database, Constants } from '@/types/database'
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 
-export const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey)
+export const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey, {
+  auth: {
+    autoRefreshToken: true,
+    persistSession: true,
+    detectSessionInUrl: true,
+    // Automatically refresh the session 30 seconds before expiry
+    refreshTokenMarginSeconds: 30
+  },
+  global: {
+    headers: {
+      'X-Client-Info': 'incred-app'
+    }
+  },
+  db: {
+    schema: 'public'
+  }
+})
 
 // Export Constants
 export { Constants }

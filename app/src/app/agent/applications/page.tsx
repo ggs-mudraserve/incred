@@ -228,12 +228,6 @@ export default function AgentApplicationsPage() {
     })
   )
 
-  useEffect(() => {
-    if (profile?.id) {
-      fetchApplications()
-    }
-  }, [profile])
-
   const fetchApplications = async () => {
     if (!profile?.id) return
 
@@ -256,6 +250,12 @@ export default function AgentApplicationsPage() {
       setLoading(false)
     }
   }
+
+  useEffect(() => {
+    if (profile?.id) {
+      fetchApplications()
+    }
+  }, [profile?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleUpdateApplication = async (applicationId: string, updates: Partial<Application>) => {
     try {
