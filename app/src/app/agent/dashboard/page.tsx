@@ -39,6 +39,14 @@ export default function AgentDashboard() {
   const [leadNotes, setLeadNotes] = useState<LeadNoteWithAuthor[]>([])
   const [newNote, setNewNote] = useState('')
   const [loadingNotes, setLoadingNotes] = useState(false)
+  const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
+  const [newLead, setNewLead] = useState({
+    app_no: '',
+    name: '',
+    mobile_no: '',
+    amount: 0
+  })
+  const [creating, setCreating] = useState(false)
 
   useEffect(() => {
     if (profile) {
@@ -91,7 +99,15 @@ export default function AgentDashboard() {
         console.error('Error fetching leads:', error)
         toast.error('Failed to fetch leads')
       } else {
-        setLeads(data || [])
+        // Sort leads to put closed leads at bottom
+        const sortedLeads = (data || []).sort((a, b) => {
+          // Sort closed leads to the bottom
+          if (a.final_status === 'close' && b.final_status === 'open') return 1
+          if (a.final_status === 'open' && b.final_status === 'close') return -1
+          // For leads with same final_status, sort by created_at (newest first)
+          return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        })
+        setLeads(sortedLeads)
         setTotalCount(count || 0)
       }
     } catch (error) {
@@ -276,6 +292,58 @@ export default function AgentDashboard() {
     }
   }
 
+  const handleCreateLead = async () => {
+    if (!profile) {
+      toast.error('User not authenticated')
+      return
+    }
+
+    if (!newLead.app_no || !newLead.name || !newLead.mobile_no || !newLead.amount) {
+      toast.error('Please fill in all required fields')
+      return
+    }
+
+    if (newLead.mobile_no.length !== 10) {
+      toast.error('Mobile number must be exactly 10 digits')
+      return
+    }
+
+    if (newLead.amount < 40000 || newLead.amount > 1500000) {
+      toast.error('Amount must be between ₹40,000 and ₹15,00,000')
+      return
+    }
+
+    setCreating(true)
+    try {
+      const { error } = await supabase
+        .from('leads')
+        .insert({
+          app_no: newLead.app_no,
+          name: newLead.name,
+          mobile_no: newLead.mobile_no,
+          amount: newLead.amount,
+          agent_id: profile.id,
+          final_status: 'open'
+        })
+
+      if (error) throw error
+      
+      toast.success('Lead created successfully')
+      setNewLead({ app_no: '', name: '', mobile_no: '', amount: 0 })
+      setIsCreateDialogOpen(false)
+      fetchLeads()
+    } catch (error: unknown) {
+      console.error('Error creating lead:', error)
+      if (error && typeof error === 'object' && 'code' in error && error.code === '23505' && 'constraint' in error && error.constraint === 'leads_app_no_key') {
+        toast.error('App number already exists. Please use a unique app number.')
+      } else {
+        toast.error('Failed to create lead')
+      }
+    } finally {
+      setCreating(false)
+    }
+  }
+
   const totalPages = Math.ceil(totalCount / itemsPerPage)
 
   if (loading) {
@@ -401,6 +469,10 @@ export default function AgentDashboard() {
                 Showing {(currentPage - 1) * itemsPerPage + 1} to {Math.min(currentPage * itemsPerPage, totalCount)} of {totalCount} leads
               </CardDescription>
             </div>
+            <Button onClick={() => setIsCreateDialogOpen(true)}>
+              <Plus className="h-4 w-4 mr-2" />
+              Create New Lead
+            </Button>
           </div>
         </CardHeader>
         <CardContent>
@@ -597,6 +669,98 @@ export default function AgentDashboard() {
                   </div>
                 )}
               </div>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Create Lead Dialog */}
+      <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Create New Lead</DialogTitle>
+            <DialogDescription>
+              Add a new lead to the system. The lead will be assigned to you.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label htmlFor="app_no">App Number *</Label>
+              <Input
+                id="app_no"
+                placeholder="Enter unique app number"
+                value={newLead.app_no}
+                onChange={(e) => setNewLead({...newLead, app_no: e.target.value})}
+                required
+              />
+            </div>
+            <div>
+              <Label htmlFor="name">Full Name *</Label>
+              <Input
+                id="name"
+                placeholder="Enter customer name"
+                value={newLead.name}
+                onChange={(e) => setNewLead({...newLead, name: e.target.value})}
+                required
+              />
+            </div>
+            <div>
+              <Label htmlFor="mobile_no">Mobile Number *</Label>
+              <Input
+                id="mobile_no"
+                placeholder="10-digit mobile number"
+                value={newLead.mobile_no}
+                onChange={(e) => {
+                  const value = e.target.value.replace(/\D/g, '').slice(0, 10)
+                  setNewLead({...newLead, mobile_no: value})
+                }}
+                maxLength={10}
+                required
+              />
+            </div>
+            <div>
+              <Label htmlFor="amount">Loan Amount *</Label>
+              <Input
+                id="amount"
+                type="number"
+                placeholder="Amount between ₹40,000 - ₹15,00,000"
+                value={newLead.amount || ''}
+                onChange={(e) => setNewLead({...newLead, amount: Number(e.target.value)})}
+                min="40000"
+                max="1500000"
+                required
+              />
+            </div>
+            <div className="text-sm text-gray-500">
+              * Required fields. Lead will be assigned to you automatically.
+            </div>
+            <div className="flex justify-end space-x-2">
+              <Button 
+                variant="outline" 
+                onClick={() => {
+                  setIsCreateDialogOpen(false)
+                  setNewLead({ app_no: '', name: '', mobile_no: '', amount: 0 })
+                }}
+                disabled={creating}
+              >
+                Cancel
+              </Button>
+              <Button 
+                onClick={handleCreateLead}
+                disabled={creating || !newLead.app_no || !newLead.name || !newLead.mobile_no || !newLead.amount}
+              >
+                {creating ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                    Creating...
+                  </>
+                ) : (
+                  <>
+                    <Plus className="h-4 w-4 mr-2" />
+                    Create Lead
+                  </>
+                )}
+              </Button>
             </div>
           </div>
         </DialogContent>
