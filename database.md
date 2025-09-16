@@ -8,7 +8,9 @@ create type if not exists status_enum as enum (
   'ring more than 3 days',
   'salary low',
   'cibil issue',
-  'banking received'
+  'banking received',
+  'language_issue',
+  'ringing'
 );
 
 create type if not exists user_role as enum ('admin','agent');
@@ -63,7 +65,9 @@ insert into public.status_options(status, final_status_default, progresses_to_st
   ('ring more than 3 days','close',null),
   ('salary low','close',null),
   ('cibil issue','close',null),
-  ('banking received','open','UnderReview')
+  ('banking received','open','UnderReview'),
+  ('language_issue','close',null),
+  ('ringing','open',null)
 on conflict (status) do update
 set final_status_default = excluded.final_status_default,
     progresses_to_stage   = excluded.progresses_to_stage;

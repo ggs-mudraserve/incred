@@ -197,6 +197,8 @@ export type Database = {
         | "salary low"
         | "cibil issue"
         | "banking received"
+        | "language_issue"
+        | "ringing"
       user_role: "admin" | "agent"
     }
     CompositeTypes: {
@@ -335,6 +337,8 @@ export const Constants = {
         "salary low",
         "cibil issue",
         "banking received",
+        "language_issue",
+        "ringing",
       ],
       user_role: ["admin", "agent"],
     },
