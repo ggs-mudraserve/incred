@@ -143,45 +143,97 @@ export default function UploadLeadsPage() {
         return
       }
 
-      const headers = lines[0].split(',').map(h => h.trim())
+      // Improved CSV parsing function
+      const parseCSVLine = (line: string): string[] => {
+        const result: string[] = []
+        let current = ''
+        let inQuotes = false
+        
+        for (let i = 0; i < line.length; i++) {
+          const char = line[i]
+          
+          if (char === '"') {
+            inQuotes = !inQuotes
+          } else if (char === ',' && !inQuotes) {
+            result.push(current.trim())
+            current = ''
+          } else {
+            current += char
+          }
+        }
+        result.push(current.trim())
+        return result
+      }
+
+      const headers = parseCSVLine(lines[0]).map(h => h.replace(/"/g, '').trim())
       console.log('CSV Headers:', headers)
       console.log('First few lines:', lines.slice(0, 3))
       
-      // Validate required headers
-      const requiredHeaders = ['app_no', 'name', 'mobile_no', 'amount']
+      // Validate required headers (only app_no and mobile_no are required)
+      const requiredHeaders = ['app_no', 'mobile_no']
       const missingHeaders = requiredHeaders.filter(h => !headers.includes(h))
-      
+
       if (missingHeaders.length > 0) {
-        toast.error(`Missing required columns: ${missingHeaders.join(', ')}`)
+        toast.error(`Missing required columns: ${missingHeaders.join(', ')}\nFound columns: ${headers.join(', ')}`)
         return
       }
 
       // Parse CSV data
       const leads = []
       const validColumns = ['app_no', 'name', 'mobile_no', 'amount'] // Only columns that exist in the database
+      const errors: string[] = []
 
       for (let i = 1; i < lines.length; i++) {
         const line = lines[i].trim()
         if (!line) continue
 
-        const values = line.split(',').map(v => v.trim())
+        const values = parseCSVLine(line).map(v => v.replace(/"/g, '').trim())
         const lead: Record<string, string | number | null> = {}
 
         // Only include columns that exist in the database
         headers.forEach((header, index) => {
-          if (validColumns.includes(header)) {
-            lead[header] = values[index] || null
+          if (validColumns.includes(header) && index < values.length) {
+            const value = values[index]
+            lead[header] = value && value !== '' ? value : null
           }
         })
 
-        console.log('Parsed lead:', lead)
+        console.log(`Row ${i + 1} parsed lead:`, lead)
 
-        // Convert amount to number if it exists
-        if (lead.amount) {
-          lead.amount = parseFloat(lead.amount.replace(/[^0-9.-]/g, '')) || 0
+        // Validate required fields (only app_no and mobile_no are required)
+        if (!lead.app_no || lead.app_no === '') {
+          errors.push(`Row ${i + 1}: app_no is required (got: "${lead.app_no}")`)
+          continue
         }
 
-        // Add default values - status is now null by default
+        if (!lead.mobile_no || lead.mobile_no === '') {
+          errors.push(`Row ${i + 1}: mobile_no is required (got: "${lead.mobile_no}")`)
+          continue
+        }
+
+        // Validate mobile number (must be exactly 10 digits)
+        const mobileStr = String(lead.mobile_no).replace(/\D/g, '') // Remove non-digits
+        if (mobileStr.length !== 10) {
+          errors.push(`Row ${i + 1}: mobile_no must be exactly 10 digits (got: "${lead.mobile_no}" -> "${mobileStr}")`)
+          continue
+        }
+        lead.mobile_no = mobileStr
+
+        // Validate and convert amount (optional field)
+        if (lead.amount && lead.amount !== '') {
+          const amount = parseFloat(String(lead.amount).replace(/[^0-9.-]/g, ''))
+          if (isNaN(amount) || amount < 40000 || amount > 1500000) {
+            errors.push(`Row ${i + 1}: amount must be between ₹40,000 and ₹15,00,000 (got: "${lead.amount}" -> ${amount})`)
+            continue
+          }
+          lead.amount = amount
+        } else {
+          lead.amount = null // Allow null amounts
+        }
+
+        // Name is optional, so no validation needed (can be null or empty)
+
+        // Add default values
         lead.final_status = 'open'
         lead.agent_id = selectedAgent
         lead.created_at = new Date().toISOString()
@@ -191,21 +243,63 @@ export default function UploadLeadsPage() {
         leads.push(lead)
       }
 
+      if (errors.length > 0) {
+        console.log('All validation errors:', errors)
+        toast.error(`Validation errors found:\n${errors.slice(0, 5).join('\n')}${errors.length > 5 ? `\n... and ${errors.length - 5} more errors` : ''}`)
+        return
+      }
+
       if (leads.length === 0) {
         toast.error('No valid data found in CSV')
         return
       }
 
-      // Insert leads into database
+      console.log('Final leads to insert:', leads)
+
+      // Check for existing records to avoid duplicates
+      const appNos = leads.map(lead => lead.app_no).filter(Boolean)
+      const mobileNos = leads.map(lead => lead.mobile_no).filter(Boolean)
+
+      const { data: existingLeads } = await supabase
+        .from('leads')
+        .select('app_no, mobile_no')
+        .or(`app_no.in.(${appNos.join(',')}),mobile_no.in.(${mobileNos.join(',')})`)
+
+      const existingAppNos = new Set(existingLeads?.map(lead => lead.app_no) || [])
+      const existingMobileNos = new Set(existingLeads?.map(lead => lead.mobile_no) || [])
+
+      // Filter out duplicates
+      const newLeads = leads.filter(lead => {
+        const isDuplicateApp = existingAppNos.has(lead.app_no as string)
+        const isDuplicateMobile = existingMobileNos.has(lead.mobile_no as string)
+        return !isDuplicateApp && !isDuplicateMobile
+      })
+
+      const skippedCount = leads.length - newLeads.length
+
+      if (newLeads.length === 0) {
+        toast.error('All leads in the CSV already exist in the database (duplicate app_no or mobile_no)')
+        return
+      }
+
+      // Insert only new leads into database
       const { error } = await supabase
         .from('leads')
-        .insert(leads)
+        .insert(newLeads)
 
       if (error) {
         console.error('Error uploading leads:', error)
-        toast.error('Failed to upload leads')
+        if (error.code === '23514') {
+          toast.error('Data validation failed. Please check mobile numbers and amounts.')
+        } else {
+          toast.error(`Failed to upload leads: ${error.message}`)
+        }
       } else {
-        toast.success(`Successfully uploaded ${leads.length} leads and assigned to ${agents.find(a => a.id === selectedAgent)?.name}`)
+        let message = `Successfully uploaded ${newLeads.length} leads and assigned to ${agents.find(a => a.id === selectedAgent)?.name}`
+        if (skippedCount > 0) {
+          message += `. Skipped ${skippedCount} duplicate records.`
+        }
+        toast.success(message)
         clearFileSelection()
       }
     } catch (error) {
