@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
+import { CheckedState } from '@radix-ui/react-checkbox'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -15,6 +16,8 @@ import { Search, Filter, Edit, UserPlus, MessageSquare, Plus, Trash2 } from 'luc
 import { supabase, LeadNote, StatusEnum, Constants } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import { toast } from 'sonner'
+
+type LeadUpdateColumns = 'app_no' | 'name' | 'mobile_no' | 'amount' | 'status' | 'final_status' | 'agent_id'
 
 interface Lead {
   id: string
@@ -49,6 +52,7 @@ export default function LeadsPage() {
   const [agents, setAgents] = useState<Agent[]>([])
   const [loading, setLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
+  const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
   const [finalStatusFilter, setFinalStatusFilter] = useState('all')
   const [agentFilter, setAgentFilter] = useState('all')
@@ -74,31 +78,120 @@ export default function LeadsPage() {
   })
   const [creating, setCreating] = useState(false)
   const { user } = useAuth()
+  const [currentPage, setCurrentPage] = useState(1)
+  const [totalCount, setTotalCount] = useState(0)
+  const itemsPerPage = 50
 
   useEffect(() => {
-    fetchLeads()
+    const handler = setTimeout(() => {
+      setDebouncedSearchTerm(searchTerm)
+      setCurrentPage(1)
+    }, 300)
+
+    return () => clearTimeout(handler)
+  }, [searchTerm])
+
+  useEffect(() => {
     fetchAgents()
   }, [])
 
-  const fetchLeads = async () => {
+  const fetchLeads = useCallback(async (page = currentPage) => {
     try {
-      const { data, error } = await supabase
+      setLoading(true)
+
+      let query = supabase
         .from('leads')
         .select(`
           *,
           agent:profiles!agent_id(name)
-        `)
+        `, { count: 'exact' })
+
+      if (debouncedSearchTerm) {
+        query = query.or(`app_no.ilike.%${debouncedSearchTerm}%,mobile_no.ilike.%${debouncedSearchTerm}%,name.ilike.%${debouncedSearchTerm}%`)
+      }
+
+      if (statusFilter !== 'all') {
+        query = query.eq('status', statusFilter)
+      }
+
+      if (finalStatusFilter !== 'all') {
+        query = query.eq('final_status', finalStatusFilter)
+      }
+
+      if (agentFilter !== 'all') {
+        query = query.eq('agent_id', agentFilter)
+      }
+
+      if (fromDate) {
+        const startDate = new Date(fromDate)
+        query = query.gte('created_at', startDate.toISOString())
+      }
+
+      if (toDate) {
+        const endDate = new Date(toDate)
+        endDate.setHours(23, 59, 59, 999)
+        query = query.lte('created_at', endDate.toISOString())
+      }
+
+      query = query
         .order('created_at', { ascending: false })
+        .range((page - 1) * itemsPerPage, page * itemsPerPage - 1)
+
+      const { data, error, count } = await query
 
       if (error) throw error
-      setLeads(data || [])
+
+      setTotalCount(count || 0)
+
+      if (page > 1 && (!data || data.length === 0) && (count || 0) > 0) {
+        setLeads([])
+        setCurrentPage(prev => Math.max(prev - 1, 1))
+        return
+      }
+
+      const sortedLeads = (data || []).sort((a, b) => {
+        if (a.final_status === 'close' && b.final_status === 'open') return 1
+        if (a.final_status === 'open' && b.final_status === 'close') return -1
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      })
+
+      setLeads(sortedLeads)
     } catch (error) {
       console.error('Error fetching leads:', error)
       toast.error('Failed to fetch leads')
     } finally {
       setLoading(false)
     }
-  }
+  }, [currentPage, debouncedSearchTerm, statusFilter, finalStatusFilter, agentFilter, fromDate, toDate, itemsPerPage])
+
+  useEffect(() => {
+    fetchLeads()
+  }, [fetchLeads])
+
+  useEffect(() => {
+    setSelectedLeads(prev => {
+      const next = new Set<string>()
+      leads.forEach(lead => {
+        if (prev.has(lead.id)) {
+          next.add(lead.id)
+        }
+      })
+
+      if (next.size === prev.size) {
+        let unchanged = true
+        prev.forEach(id => {
+          if (!next.has(id) && unchanged) {
+            unchanged = false
+          }
+        })
+        if (unchanged) {
+          return prev
+        }
+      }
+
+      return next
+    })
+  }, [leads])
 
   const fetchAgents = async () => {
     try {
@@ -134,9 +227,32 @@ export default function LeadsPage() {
 
   const handleUpdateLead = async (leadId: string, updates: Partial<Lead>) => {
     try {
+      const { agent: _agent, created_at: _createdAt, updated_at: _updatedAt, uploaded_at: _uploadedAt, id: _id, ...rest } = updates as Partial<Lead> & {
+        agent?: Lead['agent']
+        created_at?: string
+        updated_at?: string
+        uploaded_at?: string
+        id?: string
+      }
+
+      const allowedKeys: LeadUpdateColumns[] = ['app_no', 'name', 'mobile_no', 'amount', 'status', 'final_status', 'agent_id']
+      const normalized = rest as Partial<Record<LeadUpdateColumns, string | number | null>>
+      const payload = allowedKeys.reduce((acc, key) => {
+        const value = normalized[key]
+        if (typeof value !== 'undefined') {
+          acc[key] = value as Lead[typeof key]
+        }
+        return acc
+      }, {} as Partial<Record<LeadUpdateColumns, string | number | null>>)
+
+      if (Object.keys(payload).length === 0) {
+        toast.error('No valid fields to update')
+        return
+      }
+
       const { error } = await supabase
         .from('leads')
-        .update(updates)
+        .update(payload)
         .eq('id', leadId)
 
       if (error) throw error
@@ -272,17 +388,22 @@ export default function LeadsPage() {
     }
   }
 
-  const handleSelectAll = (checked: boolean) => {
+  const handleSelectAll = (checked: CheckedState) => {
+    if (checked === 'indeterminate') {
+      return
+    }
+
     if (checked) {
-      setSelectedLeads(new Set(filteredLeads.map(lead => lead.id)))
+      setSelectedLeads(new Set(leads.map(lead => lead.id)))
     } else {
       setSelectedLeads(new Set())
     }
   }
 
-  const handleSelectLead = (leadId: string, checked: boolean) => {
+  const handleSelectLead = (leadId: string, checked: CheckedState) => {
+    const isChecked = checked === true
     const newSelected = new Set(selectedLeads)
-    if (checked) {
+    if (isChecked) {
       newSelected.add(leadId)
     } else {
       newSelected.delete(leadId)
@@ -366,40 +487,15 @@ export default function LeadsPage() {
     }
   }
 
-  const filteredLeads = leads.filter(lead => {
-    const matchesSearch = lead.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         lead.mobile_no?.includes(searchTerm) ||
-                         lead.app_no?.toLowerCase().includes(searchTerm.toLowerCase())
-    const matchesStatus = statusFilter === 'all' || lead.status === statusFilter
-    const matchesFinalStatus = finalStatusFilter === 'all' || lead.final_status === finalStatusFilter
-    const matchesAgent = agentFilter === 'all' || lead.agent_id === agentFilter
+  const totalPages = Math.max(1, Math.ceil(totalCount / itemsPerPage))
+  const showingFrom = totalCount === 0 ? 0 : (currentPage - 1) * itemsPerPage + 1
+  const showingTo = totalCount === 0 ? 0 : Math.min(currentPage * itemsPerPage, totalCount)
+  const allVisibleSelected = leads.length > 0 && leads.every(lead => selectedLeads.has(lead.id))
+  const someVisibleSelected = leads.some(lead => selectedLeads.has(lead.id))
+  const headerCheckboxState: CheckedState = allVisibleSelected ? true : someVisibleSelected ? 'indeterminate' : false
+  const showPagination = totalPages > 1
 
-    // Date filtering
-    let matchesDate = true
-    if (fromDate || toDate) {
-      const leadDate = new Date(lead.created_at)
-      if (fromDate) {
-        const from = new Date(fromDate)
-        matchesDate = matchesDate && leadDate >= from
-      }
-      if (toDate) {
-        const to = new Date(toDate)
-        to.setHours(23, 59, 59, 999) // Include the entire end date
-        matchesDate = matchesDate && leadDate <= to
-      }
-    }
-
-    return matchesSearch && matchesStatus && matchesFinalStatus && matchesAgent && matchesDate
-  }).sort((a, b) => {
-    // Sort closed leads to the bottom
-    if (a.final_status === 'close' && b.final_status === 'open') return 1
-    if (a.final_status === 'open' && b.final_status === 'close') return -1
-    // For leads with same final_status, sort by created_at (newest first)
-    return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-  })
-
-
-  if (loading) {
+  if (loading && leads.length === 0) {
     return (
       <div className="flex items-center justify-center min-h-screen">
         <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-blue-600"></div>
@@ -418,9 +514,12 @@ export default function LeadsPage() {
         <CardHeader>
           <div className="flex items-center justify-between">
             <div>
-              <CardTitle>All Leads</CardTitle>
+              <CardTitle>All Leads ({totalCount})</CardTitle>
               <CardDescription>
-                View and manage all leads in the system with advanced filtering
+                View and manage all leads in the system with advanced filtering.{' '}
+                {totalCount > 0
+                  ? `Showing ${showingFrom} to ${showingTo} of ${totalCount} leads`
+                  : 'No leads match the current filters'}
               </CardDescription>
             </div>
             <Button onClick={() => setIsCreateDialogOpen(true)}>
@@ -457,7 +556,13 @@ export default function LeadsPage() {
 
               <div>
                 <Label className="text-sm text-gray-600">Status</Label>
-                <Select value={statusFilter} onValueChange={setStatusFilter}>
+                <Select
+                  value={statusFilter}
+                  onValueChange={(value) => {
+                    setStatusFilter(value)
+                    setCurrentPage(1)
+                  }}
+                >
                   <SelectTrigger className="w-48">
                     <Filter className="h-4 w-4 mr-2" />
                     <SelectValue placeholder="Filter by status" />
@@ -477,7 +582,13 @@ export default function LeadsPage() {
 
               <div>
                 <Label className="text-sm text-gray-600">Final Status</Label>
-                <Select value={finalStatusFilter} onValueChange={setFinalStatusFilter}>
+                <Select
+                  value={finalStatusFilter}
+                  onValueChange={(value) => {
+                    setFinalStatusFilter(value)
+                    setCurrentPage(1)
+                  }}
+                >
                   <SelectTrigger className="w-48">
                     <Filter className="h-4 w-4 mr-2" />
                     <SelectValue placeholder="Filter by final status" />
@@ -492,7 +603,13 @@ export default function LeadsPage() {
 
               <div>
                 <Label className="text-sm text-gray-600">Agent</Label>
-                <Select value={agentFilter} onValueChange={setAgentFilter}>
+                <Select
+                  value={agentFilter}
+                  onValueChange={(value) => {
+                    setAgentFilter(value)
+                    setCurrentPage(1)
+                  }}
+                >
                   <SelectTrigger className="w-48">
                     <UserPlus className="h-4 w-4 mr-2" />
                     <SelectValue placeholder="Filter by agent" />
@@ -513,7 +630,10 @@ export default function LeadsPage() {
                 <Input
                   type="date"
                   value={fromDate}
-                  onChange={(e) => setFromDate(e.target.value)}
+                  onChange={(e) => {
+                    setFromDate(e.target.value)
+                    setCurrentPage(1)
+                  }}
                   className="w-40"
                 />
               </div>
@@ -523,13 +643,16 @@ export default function LeadsPage() {
                 <Input
                   type="date"
                   value={toDate}
-                  onChange={(e) => setToDate(e.target.value)}
+                  onChange={(e) => {
+                    setToDate(e.target.value)
+                    setCurrentPage(1)
+                  }}
                   className="w-40"
                 />
               </div>
 
               {/* Clear Filters Button */}
-              {(statusFilter !== 'all' || finalStatusFilter !== 'all' || agentFilter !== 'all' || fromDate || toDate) && (
+              {(statusFilter !== 'all' || finalStatusFilter !== 'all' || agentFilter !== 'all' || fromDate || toDate || searchTerm || debouncedSearchTerm) && (
                 <Button
                   variant="outline"
                   onClick={() => {
@@ -538,6 +661,9 @@ export default function LeadsPage() {
                     setAgentFilter('all')
                     setFromDate('')
                     setToDate('')
+                    setSearchTerm('')
+                    setDebouncedSearchTerm('')
+                    setCurrentPage(1)
                   }}
                 >
                   Clear Filters
@@ -552,8 +678,9 @@ export default function LeadsPage() {
                 <TableRow>
                   <TableHead className="w-12">
                     <Checkbox
-                      checked={selectedLeads.size === filteredLeads.length && filteredLeads.length > 0}
+                      checked={headerCheckboxState}
                       onCheckedChange={handleSelectAll}
+                      disabled={leads.length === 0}
                       aria-label="Select all"
                     />
                   </TableHead>
@@ -569,12 +696,12 @@ export default function LeadsPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filteredLeads.map((lead) => (
+                {leads.map((lead) => (
                   <TableRow key={lead.id}>
                     <TableCell>
                       <Checkbox
                         checked={selectedLeads.has(lead.id)}
-                        onCheckedChange={(checked) => handleSelectLead(lead.id, checked as boolean)}
+                        onCheckedChange={(checked) => handleSelectLead(lead.id, checked)}
                         aria-label={`Select lead ${lead.app_no}`}
                       />
                     </TableCell>
@@ -648,9 +775,37 @@ export default function LeadsPage() {
                     </TableCell>
                   </TableRow>
                 ))}
+                {leads.length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={10} className="text-center text-gray-500 py-6">
+                      No leads found for the selected filters
+                    </TableCell>
+                  </TableRow>
+                )}
               </TableBody>
             </Table>
           </div>
+          {showPagination && (
+            <div className="flex justify-center space-x-2 mt-4">
+              <Button
+                variant="outline"
+                onClick={() => setCurrentPage((prev) => Math.max(prev - 1, 1))}
+                disabled={currentPage === 1}
+              >
+                Previous
+              </Button>
+              <span className="flex items-center px-4 text-sm text-gray-600">
+                Page {currentPage} of {totalPages}
+              </span>
+              <Button
+                variant="outline"
+                onClick={() => setCurrentPage((prev) => Math.min(prev + 1, totalPages))}
+                disabled={currentPage === totalPages}
+              >
+                Next
+              </Button>
+            </div>
+          )}
         </CardContent>
       </Card>
 

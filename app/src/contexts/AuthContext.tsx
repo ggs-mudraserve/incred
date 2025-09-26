@@ -1,7 +1,7 @@
 'use client'
 
 import { createContext, useContext, useEffect, useState } from 'react'
-import { User, Session } from '@supabase/supabase-js'
+import { User, Session, AuthError } from '@supabase/supabase-js'
 import { supabase, Profile } from '@/lib/supabase'
 
 interface AuthContextType {
@@ -9,7 +9,7 @@ interface AuthContextType {
   profile: Profile | null
   session: Session | null
   loading: boolean
-  signIn: (email: string, password: string) => Promise<{ error: any }>
+  signIn: (email: string, password: string) => Promise<{ error: AuthError | null }>
   signOut: () => Promise<void>
 }
 
@@ -58,22 +58,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setSession(session)
       setUser(session?.user ?? null)
       
-      if (event === 'SIGNED_OUT' || event === 'TOKEN_REFRESHED') {
-        setProfile(null)
-      }
-      
-      if (session?.user) {
-        await fetchProfile(session.user.id)
-      } else {
+      if (event === 'SIGNED_OUT') {
         setProfile(null)
         setLoading(false)
+        return
       }
+
+      if (session?.user) {
+        await fetchProfile(session.user.id)
+        return
+      }
+
+      setProfile(null)
+      setLoading(false)
     })
 
     return () => subscription.unsubscribe()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const fetchProfile = async (userId: string, retryCount = 0) => {
+    setLoading(true)
     try {
       const { data, error } = await supabase
         .from('profiles')
@@ -93,20 +97,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             return fetchProfile(userId, retryCount + 1)
           }
         }
-        
-        // Don't clear profile on error - keep previous state
-        if (!profile) {
-          setProfile(null)
-        }
       } else {
         setProfile(data)
       }
     } catch (error) {
       console.error('Error fetching profile:', error)
-      // Don't clear profile on error - keep previous state  
-      if (!profile) {
-        setProfile(null)
-      }
     } finally {
       setLoading(false)
     }
