@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -9,7 +9,7 @@ import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
-import { Search, Filter, Eye, Edit, DollarSign } from 'lucide-react'
+import { Search, Filter, Eye } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { toast } from 'sonner'
 import {
@@ -69,6 +69,7 @@ function DroppableColumn({ id, title, count, totalAmount, children }: {
   children: React.ReactNode
 }) {
   const { setNodeRef, isOver } = useDroppable({ id })
+  const stageKey = id.replace('stage-', '')
 
   const getStageColor = (stage: string) => {
     switch (stage) {
@@ -93,19 +94,19 @@ function DroppableColumn({ id, title, count, totalAmount, children }: {
   return (
     <Card 
       ref={setNodeRef}
-      className={`h-full border-t-4 transition-all duration-200 ${getStageColor(id).split(' ').slice(-1)[0].replace('text-', 'border-t-')} ${
+      className={`h-full border-t-4 transition-all duration-200 ${getStageColor(stageKey).split(' ').slice(-1)[0].replace('text-', 'border-t-')} ${
         isOver ? 'bg-blue-50 border-blue-300 shadow-lg scale-[1.02]' : ''
       }`}
     >
       <CardHeader className="pb-4 bg-gradient-to-r from-gray-50 to-gray-100 rounded-t-lg">
         <CardTitle className="flex items-center justify-between text-base font-semibold">
           <div className="flex items-center gap-2">
-            <span className="text-lg">{getStageIcon(id)}</span>
+            <span className="text-lg">{getStageIcon(stageKey)}</span>
             <span className="text-gray-800">{title}</span>
           </div>
           <Badge
             variant="secondary"
-            className={`${getStageColor(id)} font-medium px-2 py-1`}
+            className={`${getStageColor(stageKey)} font-medium px-2 py-1`}
           >
             {count}
           </Badge>
@@ -126,7 +127,7 @@ function DroppableColumn({ id, title, count, totalAmount, children }: {
           {/* Empty state */}
           {count === 0 && (
             <div className="flex flex-col items-center justify-center py-12 text-gray-400">
-              <div className="text-4xl mb-2">{getStageIcon(id)}</div>
+              <div className="text-4xl mb-2">{getStageIcon(stageKey)}</div>
               <div className="text-sm">No applications</div>
               {isOver && (
                 <div className="text-blue-600 text-sm font-medium mt-4 animate-bounce">
@@ -272,7 +273,7 @@ export default function ApplicationsPage() {
   const handleUpdateApplication = async (applicationId: string, updates: Partial<Application>) => {
     try {
       // Filter out fields that don't belong to the applications table
-      const { lead, agent, ...applicationUpdates } = updates
+      const { lead, agent: _unusedAgent, ...applicationUpdates } = updates
       
       // Update the applications table
       const { error } = await supabase
@@ -329,21 +330,33 @@ export default function ApplicationsPage() {
     
     // Extract application ID (remove 'app-' prefix)
     const applicationId = activeId.startsWith('app-') ? activeId.replace('app-', '') : activeId
-    
-    // Check if dropping on a droppable zone (stage) or another application
-    if (!overId.startsWith('stage-')) {
-      console.log('Not dropped on a stage, ignoring. OverId:', overId)
+
+    // Determine which stage we should drop into.
+    let targetStage: string | null = null
+
+    if (overId.startsWith('stage-')) {
+      targetStage = overId.replace('stage-', '')
+    } else {
+      const sortableContainerId = over.data?.current?.sortable?.containerId
+      if (sortableContainerId && String(sortableContainerId).startsWith('stage-')) {
+        targetStage = String(sortableContainerId).replace('stage-', '')
+      } else if (overId.startsWith('app-')) {
+        const overApplicationId = overId.replace('app-', '')
+        const overApplication = applications.find(app => String(app.id) === String(overApplicationId))
+        targetStage = overApplication?.stage ?? null
+      }
+    }
+
+    if (!targetStage) {
+      console.log('Unable to resolve drop stage, ignoring. OverId:', overId)
       return
     }
     
-    // Extract stage name from the droppable zone ID (remove 'stage-' prefix)
-    const newStage = overId.replace('stage-', '')
-    
-    console.log('Drag ended - activeId:', activeId, 'applicationId:', applicationId, 'overId:', overId, 'newStage:', newStage)
+    console.log('Drag ended - activeId:', activeId, 'applicationId:', applicationId, 'overId:', overId, 'newStage:', targetStage)
 
     // Find the application being moved (handle both string and number IDs)
     const application = applications.find(app => String(app.id) === String(applicationId))
-    console.log('Found application:', application, 'current stage:', application?.stage, 'new stage:', newStage)
+    console.log('Found application:', application, 'current stage:', application?.stage, 'new stage:', targetStage)
     console.log('Looking for ID:', applicationId, 'Available IDs:', applications.map(app => app.id))
     
     if (!application) {
@@ -351,13 +364,13 @@ export default function ApplicationsPage() {
       return
     }
     
-    if (application.stage === newStage) {
+    if (application.stage === targetStage) {
       console.log('Same stage, skipping update')
       return
     }
 
     // If moving to Disbursed stage, show disbursement dialog
-    if (newStage === 'Disbursed') {
+    if (targetStage === 'Disbursed') {
       setPendingDisbursement({ applicationId, application })
       setDisbursedAmount(application.disbursed_amount?.toString() || application.loan_amount?.toString() || '')
       setIsDisbursementDialogOpen(true)
@@ -369,7 +382,7 @@ export default function ApplicationsPage() {
     setApplications(prev =>
       prev.map(app =>
         String(app.id) === String(applicationId)
-          ? { ...app, stage: newStage }
+          ? { ...app, stage: targetStage }
           : app
       )
     )
@@ -378,12 +391,12 @@ export default function ApplicationsPage() {
     try {
       const { error } = await supabase
         .from('applications')
-        .update({ stage: newStage, updated_at: new Date().toISOString() })
+        .update({ stage: targetStage, updated_at: new Date().toISOString() })
         .eq('id', applicationId)
 
       if (error) throw error
 
-      toast.success(`Application moved to ${statusColumns[newStage as keyof typeof statusColumns]}`)
+      toast.success(`Application moved to ${statusColumns[targetStage as keyof typeof statusColumns]}`)
     } catch (error) {
       console.error('Error updating application stage:', error)
       toast.error('Failed to update application stage')
@@ -435,26 +448,6 @@ export default function ApplicationsPage() {
     const matchesStage = statusFilter === 'all' || app.stage === statusFilter
     return matchesSearch && matchesStage
   })
-
-  const getStageColor = (stage: string) => {
-    switch (stage) {
-      case 'UnderReview': return 'bg-yellow-100 text-yellow-800 border-yellow-200'
-      case 'Approved': return 'bg-green-100 text-green-800 border-green-200'
-      case 'Disbursed': return 'bg-emerald-100 text-emerald-800 border-emerald-200'
-      case 'Reject': return 'bg-red-100 text-red-800 border-red-200'
-      default: return 'bg-gray-100 text-gray-800 border-gray-200'
-    }
-  }
-
-  const getStageIcon = (stage: string) => {
-    switch (stage) {
-      case 'UnderReview': return '⏳'
-      case 'Approved': return '✅'
-      case 'Disbursed': return '💰'
-      case 'Reject': return '❌'
-      default: return '📄'
-    }
-  }
 
   const groupedApplications = Object.keys(statusColumns).reduce((acc, stage) => {
     acc[stage] = filteredApplications.filter(app => app.stage === stage)
