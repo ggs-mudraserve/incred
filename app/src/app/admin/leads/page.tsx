@@ -12,28 +12,20 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
-import { Search, Filter, Edit, UserPlus, MessageSquare, Plus, Trash2 } from 'lucide-react'
+import { Search, Filter, Edit, UserPlus, MessageSquare, Plus, Trash2, Loader2 } from 'lucide-react'
 import { supabase, LeadNote, StatusEnum, Constants } from '@/lib/supabase'
+import type { Lead as SupabaseLead } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import { toast } from 'sonner'
 
 type LeadUpdateColumns = 'app_no' | 'name' | 'mobile_no' | 'amount' | 'status' | 'final_status' | 'agent_id'
 
-interface Lead {
-  id: string
-  app_no: string
-  name: string
-  mobile_no: string
-  amount: number
-  status: string | null
-  final_status: string | null
-  agent_id: string | null
-  uploaded_at: string
-  created_at: string
-  updated_at: string
+type Lead = SupabaseLead & {
   agent?: {
     name: string
   }
+  email?: string | null
+  notes?: string | null
 }
 
 interface Agent {
@@ -66,7 +58,7 @@ export default function LeadsPage() {
   const [leadNotes, setLeadNotes] = useState<LeadNoteWithAuthor[]>([])
   const [newNote, setNewNote] = useState('')
   const [loadingNotes, setLoadingNotes] = useState(false)
-  const [selectedLeads, setSelectedLeads] = useState<Set<string>>(new Set())
+  const [selectedLeads, setSelectedLeads] = useState<Set<number>>(new Set())
   const [showBulkDeleteDialog, setShowBulkDeleteDialog] = useState(false)
   const [bulkDeleting, setBulkDeleting] = useState(false)
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
@@ -80,6 +72,16 @@ export default function LeadsPage() {
   const { user } = useAuth()
   const [currentPage, setCurrentPage] = useState(1)
   const [totalCount, setTotalCount] = useState(0)
+  const [loadingEditLead, setLoadingEditLead] = useState(false)
+  const blankEditLeadForm = {
+    name: '',
+    mobile_no: '',
+    email: '',
+    amount: '',
+    status: '',
+    notes: ''
+  }
+  const [editLeadForm, setEditLeadForm] = useState(blankEditLeadForm)
   const itemsPerPage = 50
 
   useEffect(() => {
@@ -94,6 +96,44 @@ export default function LeadsPage() {
   useEffect(() => {
     fetchAgents()
   }, [])
+
+  const populateEditLeadForm = (lead: Lead) => {
+    setEditLeadForm({
+      name: lead.name ?? '',
+      mobile_no: lead.mobile_no ?? '',
+      email: lead.email ?? '',
+      amount: lead.amount != null ? lead.amount.toString() : '',
+      status: lead.status ?? '',
+      notes: lead.notes ?? ''
+    })
+  }
+
+  const handleOpenEditDialog = async (lead: Lead) => {
+    setSelectedLead(lead)
+    populateEditLeadForm(lead)
+    setIsEditDialogOpen(true)
+
+    try {
+      setLoadingEditLead(true)
+      const { data, error } = await supabase
+        .from('leads')
+        .select('*')
+        .eq('id', lead.id)
+        .single()
+
+      if (error) throw error
+      if (data) {
+        const mergedLead: Lead = { ...lead, ...data }
+        setSelectedLead(mergedLead)
+        populateEditLeadForm(mergedLead)
+      }
+    } catch (error) {
+      console.error('Error fetching lead details:', error)
+      toast.error('Failed to load lead details')
+    } finally {
+      setLoadingEditLead(false)
+    }
+  }
 
   const fetchLeads = useCallback(async (page = currentPage) => {
     try {
@@ -170,7 +210,7 @@ export default function LeadsPage() {
 
   useEffect(() => {
     setSelectedLeads(prev => {
-      const next = new Set<string>()
+      const next = new Set<number>()
       leads.forEach(lead => {
         if (prev.has(lead.id)) {
           next.add(lead.id)
@@ -207,7 +247,7 @@ export default function LeadsPage() {
     }
   }
 
-  const handleAssignAgent = async (leadId: string, agentId: string) => {
+  const handleAssignAgent = async (leadId: number, agentId: string) => {
     try {
       const { error } = await supabase
         .from('leads')
@@ -225,18 +265,18 @@ export default function LeadsPage() {
     }
   }
 
-  const handleUpdateLead = async (leadId: string, updates: Partial<Lead>) => {
+  const handleUpdateLead = async (leadId: number, updates: Partial<Lead>) => {
     try {
-      const { agent: _agent, created_at: _createdAt, updated_at: _updatedAt, uploaded_at: _uploadedAt, id: _id, ...rest } = updates as Partial<Lead> & {
-        agent?: Lead['agent']
-        created_at?: string
-        updated_at?: string
-        uploaded_at?: string
-        id?: string
-      }
-
-      const allowedKeys: LeadUpdateColumns[] = ['app_no', 'name', 'mobile_no', 'amount', 'status', 'final_status', 'agent_id']
-      const normalized = rest as Partial<Record<LeadUpdateColumns, string | number | null>>
+      const allowedKeys: LeadUpdateColumns[] = [
+        'app_no',
+        'name',
+        'mobile_no',
+        'amount',
+        'status',
+        'final_status',
+        'agent_id'
+      ]
+      const normalized = updates as Partial<Record<LeadUpdateColumns, string | number | null>>
       const payload = allowedKeys.reduce((acc, key) => {
         const value = normalized[key]
         if (typeof value !== 'undefined') {
@@ -266,7 +306,7 @@ export default function LeadsPage() {
     }
   }
 
-  const updateLeadStatus = async (leadId: string, newStatus: StatusEnum) => {
+  const updateLeadStatus = async (leadId: number, newStatus: StatusEnum) => {
     try {
       // Define statuses that should set final_status to 'close'
       const closeStatuses = ['cash salary', 'self employed', 'NI', 'ring more than 3 days', 'salary low', 'cibil issue']
@@ -336,7 +376,7 @@ export default function LeadsPage() {
     }
   }
 
-  const fetchLeadNotes = async (leadId: string | number) => {
+  const fetchLeadNotes = async (leadId: number) => {
     try {
       setLoadingNotes(true)
       const { data, error } = await supabase
@@ -400,7 +440,7 @@ export default function LeadsPage() {
     }
   }
 
-  const handleSelectLead = (leadId: string, checked: CheckedState) => {
+  const handleSelectLead = (leadId: number, checked: CheckedState) => {
     const isChecked = checked === true
     const newSelected = new Set(selectedLeads)
     if (isChecked) {
@@ -753,10 +793,7 @@ export default function LeadsPage() {
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={() => {
-                            setSelectedLead(lead)
-                            setIsEditDialogOpen(true)
-                          }}
+                          onClick={() => handleOpenEditDialog(lead)}
                         >
                           <Edit className="h-4 w-4" />
                         </Button>
@@ -871,7 +908,16 @@ export default function LeadsPage() {
       </Dialog>
 
       {/* Edit Lead Dialog */}
-      <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
+      <Dialog
+        open={isEditDialogOpen}
+        onOpenChange={(open) => {
+          setIsEditDialogOpen(open)
+          if (!open) {
+            setSelectedLead(null)
+            setEditLeadForm(blankEditLeadForm)
+          }
+        }}
+      >
         <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle>Edit Lead</DialogTitle>
@@ -879,6 +925,12 @@ export default function LeadsPage() {
               Update lead information
             </DialogDescription>
           </DialogHeader>
+          {loadingEditLead && (
+            <div className="flex items-center space-x-2 text-sm text-gray-600">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              <span>Loading lead details…</span>
+            </div>
+          )}
           {selectedLead && (
             <div className="space-y-4">
               <div className="grid grid-cols-2 gap-4">
@@ -886,16 +938,20 @@ export default function LeadsPage() {
                   <Label htmlFor="name">Name</Label>
                   <Input
                     id="name"
-                    defaultValue={selectedLead.name}
-                    onChange={(e) => setSelectedLead({...selectedLead, name: e.target.value})}
+                    value={editLeadForm.name}
+                    onChange={(e) =>
+                      setEditLeadForm((prev) => ({ ...prev, name: e.target.value }))
+                    }
                   />
                 </div>
                 <div>
                   <Label htmlFor="phone">Phone</Label>
                   <Input
                     id="phone"
-                    defaultValue={selectedLead.phone}
-                    onChange={(e) => setSelectedLead({...selectedLead, phone: e.target.value})}
+                    value={editLeadForm.mobile_no}
+                    onChange={(e) =>
+                      setEditLeadForm((prev) => ({ ...prev, mobile_no: e.target.value }))
+                    }
                   />
                 </div>
               </div>
@@ -904,8 +960,10 @@ export default function LeadsPage() {
                 <Input
                   id="email"
                   type="email"
-                  defaultValue={selectedLead.email}
-                  onChange={(e) => setSelectedLead({...selectedLead, email: e.target.value})}
+                  value={editLeadForm.email}
+                  onChange={(e) =>
+                    setEditLeadForm((prev) => ({ ...prev, email: e.target.value }))
+                  }
                 />
               </div>
               <div className="grid grid-cols-2 gap-4">
@@ -914,25 +972,29 @@ export default function LeadsPage() {
                   <Input
                     id="loan_amount"
                     type="number"
-                    defaultValue={selectedLead.loan_amount}
-                    onChange={(e) => setSelectedLead({...selectedLead, loan_amount: Number(e.target.value)})}
+                    value={editLeadForm.amount}
+                    onChange={(e) =>
+                      setEditLeadForm((prev) => ({ ...prev, amount: e.target.value }))
+                    }
                   />
                 </div>
                 <div>
                   <Label htmlFor="status">Status</Label>
                   <Select
-                    value={selectedLead.status || ''}
-                    onValueChange={(value) => setSelectedLead({...selectedLead, status: value})}
+                    value={editLeadForm.status}
+                    onValueChange={(value) =>
+                      setEditLeadForm((prev) => ({ ...prev, status: value }))
+                    }
                   >
                     <SelectTrigger>
-                      <SelectValue />
+                      <SelectValue placeholder="Select status" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="new">New</SelectItem>
-                      <SelectItem value="contacted">Contacted</SelectItem>
-                      <SelectItem value="qualified">Qualified</SelectItem>
-                      <SelectItem value="not_interested">Not Interested</SelectItem>
-                      <SelectItem value="follow_up">Follow Up</SelectItem>
+                      {Constants.public.Enums.status_enum.map((status) => (
+                        <SelectItem key={status} value={status}>
+                          {status}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 </div>
@@ -941,15 +1003,44 @@ export default function LeadsPage() {
                 <Label htmlFor="notes">Notes</Label>
                 <Textarea
                   id="notes"
-                  defaultValue={selectedLead.notes || ''}
-                  onChange={(e) => setSelectedLead({...selectedLead, notes: e.target.value})}
+                  value={editLeadForm.notes}
+                  onChange={(e) =>
+                    setEditLeadForm((prev) => ({ ...prev, notes: e.target.value }))
+                  }
                 />
               </div>
               <div className="flex justify-end space-x-2">
                 <Button variant="outline" onClick={() => setIsEditDialogOpen(false)}>
                   Cancel
                 </Button>
-                <Button onClick={() => handleUpdateLead(selectedLead.id, selectedLead)}>
+                <Button
+                  onClick={() => {
+                    const amountValue = editLeadForm.amount.trim()
+                    const parsedAmount = amountValue === '' ? null : Number(amountValue)
+
+                    if (parsedAmount !== null && Number.isNaN(parsedAmount)) {
+                      toast.error('Please enter a valid amount')
+                      return
+                    }
+
+                    const payload: Partial<Lead> = {
+                      name: editLeadForm.name,
+                      mobile_no: editLeadForm.mobile_no,
+                      amount: parsedAmount,
+                      status: editLeadForm.status || null
+                    }
+
+                    if ('email' in selectedLead) {
+                      payload.email = editLeadForm.email || null
+                    }
+
+                    if ('notes' in selectedLead) {
+                      payload.notes = editLeadForm.notes || null
+                    }
+
+                    handleUpdateLead(selectedLead.id, payload)
+                  }}
+                >
                   Save Changes
                 </Button>
               </div>
