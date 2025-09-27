@@ -1,8 +1,10 @@
 'use client'
 
-import { createContext, useContext, useEffect, useState } from 'react'
+import { createContext, useContext, useEffect, useState, useCallback } from 'react'
 import { User, Session, AuthError } from '@supabase/supabase-js'
 import { supabase, Profile } from '@/lib/supabase'
+import { useRouter } from 'next/navigation'
+import { toast } from 'sonner'
 
 interface AuthContextType {
   user: User | null
@@ -14,12 +16,29 @@ interface AuthContextType {
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
+const AUTH_FREE_ROUTES = ['/login', '/setup'] as const
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [profile, setProfile] = useState<Profile | null>(null)
   const [session, setSession] = useState<Session | null>(null)
   const [loading, setLoading] = useState(true)
+  const router = useRouter()
+
+  const redirectToLogin = useCallback(
+    (options?: { notify?: boolean }) => {
+      const currentPath = window.location.pathname
+      const onAuthFreeRoute = AUTH_FREE_ROUTES.some(route => currentPath.startsWith(route))
+
+      if (!onAuthFreeRoute) {
+        if (options?.notify) {
+          toast.info('Your session ended. Please sign in again.')
+        }
+        router.replace('/login')
+      }
+    },
+    [router]
+  )
 
   useEffect(() => {
     // Get initial session
@@ -61,6 +80,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (event === 'SIGNED_OUT') {
         setProfile(null)
         setLoading(false)
+        redirectToLogin({ notify: true })
         return
       }
 
@@ -96,6 +116,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           if (!refreshError && session) {
             return fetchProfile(userId, retryCount + 1)
           }
+        } else {
+          await supabase.auth.signOut()
+          return
         }
       } else {
         setProfile(data)
@@ -117,7 +140,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signOut = async () => {
     await supabase.auth.signOut()
+    redirectToLogin()
   }
+
+  useEffect(() => {
+    // Ensure we redirect to login whenever no active session exists.
+    if (!loading && !session) {
+      redirectToLogin()
+    }
+  }, [loading, session, redirectToLogin])
 
   const value = {
     user,

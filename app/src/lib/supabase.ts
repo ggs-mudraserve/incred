@@ -1,10 +1,15 @@
 import { createClient } from '@supabase/supabase-js'
+import type { SupabaseClient } from '@supabase/supabase-js'
 import { Database, Constants } from '@/types/database'
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 
-export const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey, {
+const globalForSupabase = globalThis as unknown as {
+  supabase: SupabaseClient<Database> | undefined
+}
+
+export const supabase = globalForSupabase.supabase ?? createClient<Database>(supabaseUrl, supabaseAnonKey, {
   auth: {
     autoRefreshToken: true,
     persistSession: true,
@@ -21,6 +26,10 @@ export const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey, {
     schema: 'public'
   }
 })
+
+if (process.env.NODE_ENV !== 'production') {
+  globalForSupabase.supabase = supabase
+}
 
 // Export Constants
 export { Constants }
