@@ -16,24 +16,25 @@ export function RoleGuard({
   allowedRoles, 
   fallbackPath = '/login' 
 }: RoleGuardProps) {
-  const { profile, loading } = useAuth()
+  const { profile, initializing } = useAuth()
   const router = useRouter()
 
   useEffect(() => {
-    if (!loading) {
-      if (!profile) {
-        router.push('/login')
-        return
-      }
-
-      if (!allowedRoles.includes(profile.role)) {
-        router.push(fallbackPath)
-        return
-      }
+    if (initializing) {
+      return
     }
-  }, [profile, loading, allowedRoles, fallbackPath, router])
 
-  if (loading) {
+    if (!profile) {
+      router.push('/login')
+      return
+    }
+
+    if (!allowedRoles.includes(profile.role)) {
+      router.push(fallbackPath)
+    }
+  }, [profile, initializing, allowedRoles, fallbackPath, router])
+
+  if (initializing) {
     return (
       <div className="flex items-center justify-center min-h-screen">
         <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-blue-600"></div>

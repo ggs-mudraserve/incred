@@ -1,7 +1,7 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { useState, useEffect, useMemo, useCallback } from 'react'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -9,7 +9,7 @@ import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
-import { Search, Filter, Eye, Edit, DollarSign } from 'lucide-react'
+import { Search, Filter, Eye, Loader2 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import { DndContext, DragEndEvent, DragOverlay, DragStartEvent, useDroppable, PointerSensor, useSensor, useSensors, closestCenter } from '@dnd-kit/core'
@@ -39,58 +39,75 @@ interface Application {
 }
 
 const statusColumns = {
-  'UnderReview': 'Under Review',
-  'Approved': 'Approved',
-  'Reject': 'Rejected',
-  'Disbursed': 'Disbursed'
+  UnderReview: 'Under Review',
+  Approved: 'Approved',
+  Reject: 'Rejected',
+  Disbursed: 'Disbursed'
+} as const
+
+type StageKey = keyof typeof statusColumns
+
+const STAGE_META: Record<StageKey, { icon: string; badgeClass: string; borderClass: string }> = {
+  UnderReview: {
+    icon: '⏳',
+    badgeClass: 'bg-yellow-100 text-yellow-800 border-yellow-200',
+    borderClass: 'border-t-yellow-200'
+  },
+  Approved: {
+    icon: '✅',
+    badgeClass: 'bg-green-100 text-green-800 border-green-200',
+    borderClass: 'border-t-green-200'
+  },
+  Disbursed: {
+    icon: '💰',
+    badgeClass: 'bg-emerald-100 text-emerald-800 border-emerald-200',
+    borderClass: 'border-t-emerald-200'
+  },
+  Reject: {
+    icon: '❌',
+    badgeClass: 'bg-red-100 text-red-800 border-red-200',
+    borderClass: 'border-t-red-200'
+  }
 }
 
+const DEFAULT_STAGE_META = {
+  icon: '📄',
+  badgeClass: 'bg-gray-100 text-gray-800 border-gray-200',
+  borderClass: 'border-t-gray-200'
+}
+
+const getStageMeta = (stage: string) => STAGE_META[stage as StageKey] ?? DEFAULT_STAGE_META
+
+const PAGE_SIZE = 100
+
 // Droppable Column Component
-function DroppableColumn({ id, title, count, totalAmount, children }: {
-  id: string
+function DroppableColumn({ droppableId, stageKey, title, count, totalAmount, children }: {
+  droppableId: string
+  stageKey: StageKey
   title: string
   count: number
   totalAmount: number
   children: React.ReactNode
 }) {
-  const { setNodeRef, isOver } = useDroppable({ id })
-
-  const getStageColor = (stage: string) => {
-    switch (stage) {
-      case 'UnderReview': return 'bg-yellow-100 text-yellow-800 border-yellow-200'
-      case 'Approved': return 'bg-green-100 text-green-800 border-green-200'
-      case 'Disbursed': return 'bg-emerald-100 text-emerald-800 border-emerald-200'
-      case 'Reject': return 'bg-red-100 text-red-800 border-red-200'
-      default: return 'bg-gray-100 text-gray-800 border-gray-200'
-    }
-  }
-
-  const getStageIcon = (stage: string) => {
-    switch (stage) {
-      case 'UnderReview': return '⏳'
-      case 'Approved': return '✅'
-      case 'Disbursed': return '💰'
-      case 'Reject': return '❌'
-      default: return '📄'
-    }
-  }
+  const { setNodeRef, isOver } = useDroppable({ id: droppableId })
+  const meta = getStageMeta(stageKey)
 
   return (
     <Card 
       ref={setNodeRef}
-      className={`h-full border-t-4 transition-all duration-200 ${getStageColor(id).split(' ').slice(-1)[0].replace('text-', 'border-t-')} ${
+      className={`h-full border-t-4 transition-all duration-200 ${meta.borderClass} ${
         isOver ? 'bg-blue-50 border-blue-300 shadow-lg scale-[1.02]' : ''
       }`}
     >
       <CardHeader className="pb-4 bg-gradient-to-r from-gray-50 to-gray-100 rounded-t-lg">
         <CardTitle className="flex items-center justify-between text-base font-semibold">
           <div className="flex items-center gap-2">
-            <span className="text-lg">{getStageIcon(id)}</span>
+            <span className="text-lg">{meta.icon}</span>
             <span className="text-gray-800">{title}</span>
           </div>
           <Badge
             variant="secondary"
-            className={`${getStageColor(id)} font-medium px-2 py-1`}
+            className={`${meta.badgeClass} font-medium px-2 py-1`}
           >
             {count}
           </Badge>
@@ -111,7 +128,7 @@ function DroppableColumn({ id, title, count, totalAmount, children }: {
           {/* Empty state */}
           {count === 0 && (
             <div className="flex flex-col items-center justify-center py-12 text-gray-400">
-              <div className="text-4xl mb-2">{getStageIcon(id)}</div>
+              <div className="text-4xl mb-2">{meta.icon}</div>
               <div className="text-sm">No applications</div>
               {isOver && (
                 <div className="text-blue-600 text-sm font-medium mt-4 animate-bounce">
@@ -211,6 +228,9 @@ export default function AgentApplicationsPage() {
   const { profile } = useAuth()
   const [applications, setApplications] = useState<Application[]>([])
   const [loading, setLoading] = useState(true)
+  const [maxRecords, setMaxRecords] = useState(PAGE_SIZE)
+  const [hasMore, setHasMore] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
   const [selectedApplication, setSelectedApplication] = useState<Application | null>(null)
@@ -228,34 +248,62 @@ export default function AgentApplicationsPage() {
     })
   )
 
-  const fetchApplications = async () => {
-    if (!profile?.id) return
+  const fetchApplications = useCallback(
+    async (options?: { skipLoader?: boolean }) => {
+      if (!profile?.id) return
 
-    try {
-      const { data, error } = await supabase
-        .from('applications')
-        .select(`
-          *,
-          lead:leads!lead_id(name, mobile_no)
-        `)
-        .eq('agent_id', profile.id)
-        .order('created_at', { ascending: false })
+      try {
+        if (!options?.skipLoader) {
+          setLoading(true)
+        }
 
-      if (error) throw error
-      setApplications(data || [])
-    } catch (error) {
-      console.error('Error fetching applications:', error)
-      toast.error('Failed to fetch applications')
-    } finally {
-      setLoading(false)
-    }
-  }
+        const { data, error, count } = await supabase
+          .from('applications')
+          .select(
+            `*,
+            lead:leads!lead_id(name, mobile_no)`,
+            { count: 'exact' }
+          )
+          .eq('agent_id', profile.id)
+          .order('created_at', { ascending: false })
+          .range(0, Math.max(maxRecords - 1, 0))
+
+        if (error) throw error
+
+        const nextData = data || []
+        setApplications(nextData)
+
+        if (typeof count === 'number') {
+          setHasMore(count > maxRecords)
+        } else {
+          setHasMore(nextData.length === maxRecords)
+        }
+      } catch (error) {
+        console.error('Error fetching applications:', error)
+        toast.error('Failed to fetch applications')
+      } finally {
+        if (!options?.skipLoader) {
+          setLoading(false)
+        }
+      }
+    },
+    [maxRecords, profile?.id]
+  )
 
   useEffect(() => {
-    if (profile?.id) {
-      fetchApplications()
+    if (!profile?.id) return
+
+    const skipLoader = maxRecords > PAGE_SIZE
+    if (skipLoader) {
+      setLoadingMore(true)
     }
-  }, [profile?.id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+    fetchApplications({ skipLoader }).finally(() => {
+      if (skipLoader) {
+        setLoadingMore(false)
+      }
+    })
+  }, [profile?.id, maxRecords, fetchApplications])
 
   const handleUpdateApplication = async (applicationId: string, updates: Partial<Application>) => {
     try {
@@ -275,7 +323,7 @@ export default function AgentApplicationsPage() {
 
       // Remove undefined values
       const cleanUpdates = Object.fromEntries(
-        Object.entries(dbUpdates).filter(([_, value]) => value !== undefined)
+        Object.entries(dbUpdates).filter(([, value]) => value !== undefined)
       )
 
       // Update the applications table
@@ -317,7 +365,6 @@ export default function AgentApplicationsPage() {
   const handleDragStart = (event: DragStartEvent) => {
     const activeId = String(event.active.id)
     const applicationId = activeId.startsWith('app-') ? activeId.replace('app-', '') : activeId
-    console.log('Drag started:', event.active.id, 'applicationId:', applicationId)
     setActiveId(applicationId)
   }
 
@@ -335,7 +382,6 @@ export default function AgentApplicationsPage() {
     
     // Check if dropping on a droppable zone (stage) or another application
     if (!overId.startsWith('stage-')) {
-      console.log('Not dropped on a stage, ignoring')
       return
     }
     
@@ -384,6 +430,12 @@ export default function AgentApplicationsPage() {
     }
   }
 
+  const handleLoadMore = () => {
+    if (loadingMore) return
+    setLoadingMore(true)
+    setMaxRecords(prev => prev + PAGE_SIZE)
+  }
+
   const handleDisbursementConfirm = async () => {
     if (!pendingDisbursement || !disbursedAmount) {
       toast.error('Please enter a disbursed amount')
@@ -421,50 +473,56 @@ export default function AgentApplicationsPage() {
     }
   }
 
-  const filteredApplications = applications.filter(app => {
-    const matchesSearch = app.lead?.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         app.lead?.mobile_no?.includes(searchTerm)
-    const matchesStage = statusFilter === 'all' || app.stage === statusFilter
-    return matchesSearch && matchesStage
-  })
+  const normalizedSearch = useMemo(() => searchTerm.trim().toLowerCase(), [searchTerm])
 
-  const getStageColor = (stage: string) => {
-    switch (stage) {
-      case 'UnderReview': return 'bg-yellow-100 text-yellow-800 border-yellow-200'
-      case 'Approved': return 'bg-green-100 text-green-800 border-green-200'
-      case 'Disbursed': return 'bg-emerald-100 text-emerald-800 border-emerald-200'
-      case 'Reject': return 'bg-red-100 text-red-800 border-red-200'
-      default: return 'bg-gray-100 text-gray-800 border-gray-200'
+  const filteredApplications = useMemo(() => {
+    if (!normalizedSearch && statusFilter === 'all') {
+      return applications
     }
-  }
 
-  const getStageIcon = (stage: string) => {
-    switch (stage) {
-      case 'UnderReview': return '⏳'
-      case 'Approved': return '✅'
-      case 'Disbursed': return '💰'
-      case 'Reject': return '❌'
-      default: return '📄'
+    return applications.filter(app => {
+      const searchMatch =
+        !normalizedSearch ||
+        app.lead?.name?.toLowerCase().includes(normalizedSearch) ||
+        app.lead?.mobile_no?.includes(searchTerm.trim())
+
+      const stageMatch = statusFilter === 'all' || app.stage === statusFilter
+
+      return searchMatch && stageMatch
+    })
+  }, [applications, normalizedSearch, searchTerm, statusFilter])
+
+  const groupedApplications = useMemo(() => {
+    const grouping: Record<StageKey, Application[]> = {
+      UnderReview: [],
+      Approved: [],
+      Reject: [],
+      Disbursed: []
     }
-  }
 
-  const groupedApplications = Object.keys(statusColumns).reduce((acc, stage) => {
-    acc[stage] = filteredApplications.filter(app => app.stage === stage)
-    return acc
-  }, {} as Record<string, any[]>)
+    filteredApplications.forEach(app => {
+      const rawStage = (app.stage || 'UnderReview') as string
+      const key: StageKey = STAGE_META[rawStage as StageKey] ? (rawStage as StageKey) : 'UnderReview'
+      grouping[key].push(app)
+    })
 
-  // Calculate total amounts for each stage
-  const stageTotals = Object.keys(statusColumns).reduce((acc, stage) => {
-    const apps = groupedApplications[stage] || []
-    if (stage === 'Disbursed') {
-      // For disbursed stage, sum up disbursed amounts
-      acc[stage] = apps.reduce((sum, app) => sum + (app.disbursed_amount || 0), 0)
-    } else {
-      // For other stages, sum up loan amounts
-      acc[stage] = apps.reduce((sum, app) => sum + (app.loan_amount || 0), 0)
-    }
-    return acc
-  }, {} as Record<string, number>)
+    return grouping
+  }, [filteredApplications])
+
+  const stageTotals = useMemo(() => {
+    return (Object.keys(statusColumns) as StageKey[]).reduce((acc, stage) => {
+      const apps = groupedApplications[stage] || []
+      const total = apps.reduce((sum, app) => {
+        if (stage === 'Disbursed') {
+          return sum + (app.disbursed_amount || 0)
+        }
+        return sum + (app.loan_amount || 0)
+      }, 0)
+
+      acc[stage] = total
+      return acc
+    }, {} as Record<StageKey, number>)
+  }, [groupedApplications])
 
   if (loading) {
     return (
@@ -505,7 +563,7 @@ export default function AgentApplicationsPage() {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All Status</SelectItem>
-            {Object.entries(statusColumns).map(([value, label]) => (
+            {(Object.entries(statusColumns) as [StageKey, string][]).map(([value, label]) => (
               <SelectItem key={value} value={value}>{label}</SelectItem>
             ))}
           </SelectContent>
@@ -521,10 +579,11 @@ export default function AgentApplicationsPage() {
           onDragEnd={handleDragEnd}
         >
           <div className="flex gap-6 min-w-full pb-4" style={{ minWidth: 'max-content' }}>
-            {Object.entries(statusColumns).map(([status, title]) => (
+            {(Object.entries(statusColumns) as [StageKey, string][]).map(([status, title]) => (
               <div key={status} className="flex-1 min-w-80">
                 <DroppableColumn
-                  id={`stage-${status}`}
+                  droppableId={`stage-${status}`}
+                  stageKey={status}
                   title={title}
                   count={groupedApplications[status]?.length || 0}
                   totalAmount={stageTotals[status] || 0}
@@ -560,6 +619,15 @@ export default function AgentApplicationsPage() {
           </DragOverlay>
         </DndContext>
       </div>
+
+      {hasMore && (
+        <div className="flex justify-center">
+          <Button onClick={handleLoadMore} variant="outline" disabled={loadingMore} className="flex items-center gap-2">
+            {loadingMore && <Loader2 className="h-4 w-4 animate-spin" />}
+            {loadingMore ? 'Loading more applications…' : 'Load more applications'}
+          </Button>
+        </div>
+      )}
 
       {/* Edit Application Dialog */}
       <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
@@ -610,7 +678,7 @@ export default function AgentApplicationsPage() {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {Object.entries(statusColumns).map(([value, label]) => (
+                      {(Object.entries(statusColumns) as [StageKey, string][]).map(([value, label]) => (
                         <SelectItem key={value} value={value}>{label}</SelectItem>
                       ))}
                     </SelectContent>

@@ -11,6 +11,7 @@ import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Textarea } from '@/components/ui/textarea'
 import { supabase, Lead, LeadNote, StatusEnum, Constants } from '@/lib/supabase'
+import { deriveFinalStatus, SORT_LEADS_BY_STATUS_AND_CREATED_AT } from '@/lib/lead-helpers'
 import { useAuth } from '@/contexts/AuthContext'
 import { Search, MessageSquare, Plus } from 'lucide-react'
 import { toast } from 'sonner'
@@ -94,13 +95,7 @@ export default function AgentDashboard() {
         toast.error('Failed to fetch leads')
       } else {
         // Sort leads to put closed leads at bottom
-        const sortedLeads = (data || []).sort((a, b) => {
-          // Sort closed leads to the bottom
-          if (a.final_status === 'close' && b.final_status === 'open') return 1
-          if (a.final_status === 'open' && b.final_status === 'close') return -1
-          // For leads with same final_status, sort by created_at (newest first)
-          return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-        })
+        const sortedLeads = (data || []).sort(SORT_LEADS_BY_STATUS_AND_CREATED_AT)
         setLeads(sortedLeads)
         setTotalCount(count || 0)
       }
@@ -131,21 +126,12 @@ export default function AgentDashboard() {
 
   const updateLeadStatus = async (leadId: number, newStatus: StatusEnum) => {
     try {
-      // Define statuses that should set final_status to 'close'
-      const closeStatuses = ['cash salary', 'self employed', 'NI', 'ring more than 3 days', 'salary low', 'cibil issue']
-
-      // Determine final_status based on the new status
-      let finalStatus = 'open'
-      if (closeStatuses.includes(newStatus)) {
-        finalStatus = 'close'
-      }
-
       // Update the lead with new status and final_status
       const { error: updateError } = await supabase
         .from('leads')
         .update({
           status: newStatus,
-          final_status: finalStatus
+          final_status: deriveFinalStatus(newStatus)
         })
         .eq('id', leadId)
 

@@ -11,6 +11,7 @@ interface AuthContextType {
   profile: Profile | null
   session: Session | null
   loading: boolean
+  initializing: boolean
   signIn: (email: string, password: string) => Promise<{ error: AuthError | null }>
   signOut: () => Promise<void>
 }
@@ -23,6 +24,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [profile, setProfile] = useState<Profile | null>(null)
   const [session, setSession] = useState<Session | null>(null)
   const [loading, setLoading] = useState(true)
+  const [initializing, setInitializing] = useState(true)
   const router = useRouter()
 
   const redirectToLogin = useCallback(
@@ -63,6 +65,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       } catch (error) {
         console.error('Error initializing auth:', error)
         setLoading(false)
+      } finally {
+        setInitializing(false)
       }
     }
 
@@ -80,24 +84,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (event === 'SIGNED_OUT') {
         setProfile(null)
         setLoading(false)
+        setInitializing(false)
         redirectToLogin({ notify: true })
         return
       }
 
       if (session?.user) {
-        await fetchProfile(session.user.id)
+        await fetchProfile(session.user.id, { silent: event === 'TOKEN_REFRESHED' })
         return
       }
 
       setProfile(null)
       setLoading(false)
+      setInitializing(false)
     })
 
     return () => subscription.unsubscribe()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const fetchProfile = async (userId: string, retryCount = 0) => {
-    setLoading(true)
+  const fetchProfile = async (
+    userId: string,
+    { retryCount = 0, silent = false }: { retryCount?: number; silent?: boolean } = {}
+  ) => {
+    const shouldToggleLoading = !silent || profile === null || retryCount > 0
+
+    if (shouldToggleLoading) {
+      setLoading(true)
+    }
+
     try {
       const { data, error } = await supabase
         .from('profiles')
@@ -107,26 +121,36 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       if (error) {
         console.error('Error fetching profile:', error)
-        
+
         // If it's an auth error and we haven't retried, try to refresh the session
         if (error.code === 'PGRST301' && retryCount === 0) {
           console.log('Auth error detected, attempting to refresh session...')
           const { data: { session }, error: refreshError } = await supabase.auth.refreshSession()
           
           if (!refreshError && session) {
-            return fetchProfile(userId, retryCount + 1)
+            return fetchProfile(userId, { retryCount: retryCount + 1, silent })
           }
-        } else {
-          await supabase.auth.signOut()
+
+          redirectToLogin({ notify: true })
           return
         }
-      } else {
-        setProfile(data)
+
+        if (retryCount < 2) {
+          await new Promise(resolve => setTimeout(resolve, 500 * (retryCount + 1)))
+          return fetchProfile(userId, { retryCount: retryCount + 1, silent })
+        }
+
+        toast.error('Unable to load your profile. Please refresh or sign in again if the issue persists.')
+        return
       }
+
+      setProfile(data)
     } catch (error) {
       console.error('Error fetching profile:', error)
     } finally {
-      setLoading(false)
+      if (shouldToggleLoading) {
+        setLoading(false)
+      }
     }
   }
 
@@ -145,16 +169,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     // Ensure we redirect to login whenever no active session exists.
-    if (!loading && !session) {
+    if (!initializing && !session) {
       redirectToLogin()
     }
-  }, [loading, session, redirectToLogin])
+  }, [initializing, session, redirectToLogin])
 
   const value = {
     user,
     profile,
     session,
     loading,
+    initializing,
     signIn,
     signOut,
   }

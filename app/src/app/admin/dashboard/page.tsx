@@ -30,6 +30,16 @@ interface DashboardStats {
   }>
 }
 
+type DailyLeadRow = { uploaded_at: string; final_status: string | null }
+type AgentLeadRow = { final_status: string | null; profiles: { name: string | null } | null }
+type DisbursalRow = {
+  disbursed_amount: number | null
+  created_at: string
+  leads: { profiles: { name: string | null } | null } | null
+}
+
+type ExportableRow = Record<string, string | number | null | undefined>
+
 export default function AdminDashboard() {
   const [stats, setStats] = useState<DashboardStats>({
     dailyStats: [],
@@ -46,92 +56,84 @@ export default function AdminDashboard() {
   const fetchDashboardStats = async () => {
     try {
       setLoading(true)
-      
-      // Fetch daily open vs close leads (last 30 days)
-      const { data: dailyData } = await supabase
-        .from('leads')
-        .select('uploaded_at, final_status')
-        .gte('uploaded_at', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString())
+      const last30Days = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
 
-      // Process daily stats
-      const dailyStatsMap = new Map()
-      dailyData?.forEach(lead => {
+      const [dailyResponse, agentResponse, disbursalResponse] = await Promise.all([
+        supabase
+          .from('leads')
+          .select('uploaded_at, final_status')
+          .gte('uploaded_at', last30Days),
+        supabase
+          .from('leads')
+          .select('final_status, profiles!leads_agent_id_fkey(name)'),
+        supabase
+          .from('applications')
+          .select(
+            `disbursed_amount, created_at, leads!applications_lead_id_fkey(profiles!leads_agent_id_fkey(name))`
+          )
+          .eq('stage', 'Disbursed')
+          .not('disbursed_amount', 'is', null)
+      ])
+
+      if (dailyResponse.error || agentResponse.error || disbursalResponse.error) {
+        throw dailyResponse.error || agentResponse.error || disbursalResponse.error
+      }
+
+      const dailyStatsMap = new Map<string, { date: string; open_leads: number; close_leads: number }>()
+      const dailyData = (dailyResponse.data ?? []) as DailyLeadRow[]
+      dailyData.forEach(lead => {
         const date = new Date(lead.uploaded_at).toISOString().split('T')[0]
         if (!dailyStatsMap.has(date)) {
           dailyStatsMap.set(date, { date, open_leads: 0, close_leads: 0 })
         }
-        const stats = dailyStatsMap.get(date)
+        const current = dailyStatsMap.get(date)!
         if (lead.final_status === 'open') {
-          stats.open_leads++
+          current.open_leads += 1
         } else {
-          stats.close_leads++
+          current.close_leads += 1
         }
       })
 
-      // Fetch agent-wise stats
-      const { data: agentData } = await supabase
-        .from('leads')
-        .select(`
-          final_status,
-          profiles!leads_agent_id_fkey(name)
-        `)
-
-      // Process agent stats
-      const agentStatsMap = new Map()
-      agentData?.forEach(lead => {
+      const agentStatsMap = new Map<string, { agent_name: string; open_leads: number; close_leads: number }>()
+      const agentData = (agentResponse.data ?? []) as AgentLeadRow[]
+      agentData.forEach(lead => {
         const agentName = lead.profiles?.name || 'Unknown'
         if (!agentStatsMap.has(agentName)) {
           agentStatsMap.set(agentName, { agent_name: agentName, open_leads: 0, close_leads: 0 })
         }
-        const stats = agentStatsMap.get(agentName)
+        const current = agentStatsMap.get(agentName)!
         if (lead.final_status === 'open') {
-          stats.open_leads++
+          current.open_leads += 1
         } else {
-          stats.close_leads++
+          current.close_leads += 1
         }
       })
 
-      // Fetch disbursal data
-      const { data: disbursalData } = await supabase
-        .from('applications')
-        .select(`
-          disbursed_amount,
-          created_at,
-          leads!applications_lead_id_fkey(
-            profiles!leads_agent_id_fkey(name)
-          )
-        `)
-        .eq('stage', 'Disbursed')
-        .not('disbursed_amount', 'is', null)
-
-      // Process daily disbursals
-      const dailyDisbursalMap = new Map()
-      const monthlyDisbursalMap = new Map()
-      
-      disbursalData?.forEach(app => {
+      const dailyDisbursalMap = new Map<string, { date: string; agent_name: string; total_disbursed: number }>()
+      const monthlyDisbursalMap = new Map<string, { month: string; agent_name: string; total_disbursed: number }>()
+      const disbursalData = (disbursalResponse.data ?? []) as DisbursalRow[]
+      disbursalData.forEach(app => {
         const date = new Date(app.created_at).toISOString().split('T')[0]
         const month = new Date(app.created_at).toISOString().substring(0, 7)
         const agentName = app.leads?.profiles?.name || 'Unknown'
         const amount = app.disbursed_amount || 0
 
-        // Daily disbursals
         const dailyKey = `${date}-${agentName}`
         if (!dailyDisbursalMap.has(dailyKey)) {
           dailyDisbursalMap.set(dailyKey, { date, agent_name: agentName, total_disbursed: 0 })
         }
-        dailyDisbursalMap.get(dailyKey).total_disbursed += amount
+        dailyDisbursalMap.get(dailyKey)!.total_disbursed += amount
 
-        // Monthly disbursals
         const monthlyKey = `${month}-${agentName}`
         if (!monthlyDisbursalMap.has(monthlyKey)) {
           monthlyDisbursalMap.set(monthlyKey, { month, agent_name: agentName, total_disbursed: 0 })
         }
-        monthlyDisbursalMap.get(monthlyKey).total_disbursed += amount
+        monthlyDisbursalMap.get(monthlyKey)!.total_disbursed += amount
       })
 
       setStats({
         dailyStats: Array.from(dailyStatsMap.values()).sort((a, b) => b.date.localeCompare(a.date)),
-        agentStats: Array.from(agentStatsMap.values()),
+        agentStats: Array.from(agentStatsMap.values()).sort((a, b) => a.agent_name.localeCompare(b.agent_name)),
         dailyDisbursals: Array.from(dailyDisbursalMap.values()).sort((a, b) => b.date.localeCompare(a.date)),
         monthlyDisbursals: Array.from(monthlyDisbursalMap.values()).sort((a, b) => b.month.localeCompare(a.month))
       })
@@ -142,13 +144,13 @@ export default function AdminDashboard() {
     }
   }
 
-  const exportToCSV = (data: any[], filename: string) => {
+  const exportToCSV = (data: ExportableRow[], filename: string) => {
     if (data.length === 0) return
     
     const headers = Object.keys(data[0])
     const csvContent = [
       headers.join(','),
-      ...data.map(row => headers.map(header => row[header]).join(','))
+      ...data.map(row => headers.map(header => `${row[header] ?? ''}`).join(','))
     ].join('\n')
     
     const blob = new Blob([csvContent], { type: 'text/csv' })

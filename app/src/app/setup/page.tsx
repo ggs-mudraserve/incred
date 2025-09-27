@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -8,6 +8,9 @@ import { Label } from '@/components/ui/label'
 import { supabase } from '@/lib/supabase'
 import { toast } from 'sonner'
 import { useRouter } from 'next/navigation'
+
+const setupEnabled =
+  process.env.NEXT_PUBLIC_ENABLE_SETUP === 'true' || process.env.NODE_ENV !== 'production'
 
 export default function SetupPage() {
   const [loading, setLoading] = useState(false)
@@ -22,6 +25,12 @@ export default function SetupPage() {
     password: 'agent123'
   })
   const router = useRouter()
+
+  useEffect(() => {
+    if (!setupEnabled) {
+      router.replace('/login')
+    }
+  }, [router])
 
   const createUser = async (userData: typeof adminData, role: 'admin' | 'agent') => {
     try {
@@ -147,6 +156,22 @@ export default function SetupPage() {
     } finally {
       setLoading(false)
     }
+  }
+
+  if (!setupEnabled) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <Card className="w-full max-w-md text-center">
+          <CardHeader>
+            <CardTitle className="text-xl">Setup Disabled</CardTitle>
+            <CardDescription>
+              Application setup is only available during local development or when
+              `NEXT_PUBLIC_ENABLE_SETUP` is explicitly set to `true`.
+            </CardDescription>
+          </CardHeader>
+        </Card>
+      </div>
+    )
   }
 
   return (
